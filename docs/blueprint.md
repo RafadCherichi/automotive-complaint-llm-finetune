@@ -151,6 +151,20 @@ This keeps the project honest against "existing data only, zero budget": labels 
 
 **Data sizing target:** aim for roughly 500–1,000 labeled training pairs (well within documented QLoRA norms for classification/extraction-style tasks on 7-8B models) plus a separate held-out set of 100–150 hand-spot-checked examples for the before/after eval — spot-checked by Rafad, not the full training set, to keep this from becoming a manual-labeling bottleneck.
 
+### Section 5a — Resolved sub-decisions (Phase 1)
+
+**Data access method:** full NHTSA flat file bulk download (`static.nhtsa.gov/odi/ffdd/cmpl/FLAT_CMPL.zip`), read in chunks given the 8GB RAM constraint — not per-make/model API loops. The flat file is the authoritative source, covers all makes/models/years in one pull, and avoids selection bias from manually picking which models to query. (Exploratory single-model API pulls for schema design purposes only are fine and don't need to be redone — just don't build the actual training/eval sets that way.)
+
+**Class imbalance (safety_risk / severity are heavily skewed — ~97% "no"/"low" in real data):**
+- *Training set:* deliberately oversample the rare positive classes — pull in most/all available safety-flagged complaints from the sampling pool, fill the remainder with negatives, targeting roughly a 30-35% `safety_risk: yes` rate (not 50/50 — that would be artificially balanced and risk overcorrecting).
+- *Eval set:* also stratify (don't leave at natural 97/3), and **report metrics per class** — precision/recall specifically on `safety_risk: yes`, and per-tier accuracy on `severity` — not just overall accuracy. A blended accuracy number would hide exactly the failure mode the PM safety-triage story (Section 3) cares about most: missed safety signals.
+
+**Multi-valued `component` field:** take the first-listed value as the primary target label, bucketed into the fixed taxonomy (as proposed). Additionally, retain the full raw multi-value string (e.g. `"POWER TRAIN,ENGINE"`) as a metadata column in `data/processed/` — not part of the training target, but available for the Phase 3 error-analysis writeup, so multi-component complaints that get oversimplified are a documented, honest limitation rather than a silent blind spot.
+
+**`defect_type` taxonomy (revised — expanded from the original proposal):**
+`ENGINE/STALLING/POWER LOSS`, `UNINTENDED ACCELERATION`, `BRAKE FAILURE`, `STEERING LOSS`, `TRANSMISSION FAILURE`, `SUSPENSION FAILURE`, `TIRE/WHEEL FAILURE`, `FUEL SYSTEM LEAK`, `FIRE/SMOKE`, `ELECTRICAL FAULT`, `AIRBAG NON-DEPLOYMENT`, `SEAT BELT FAILURE`, `STRUCTURAL/CORROSION`, `SOFTWARE/INFOTAINMENT/ADAS`, `OTHER`.
+Additions vs. the original 9-category proposal: unintended acceleration (historically one of NHTSA's most significant complaint categories), transmission failure, suspension failure, tire/wheel failure, fuel system leak (split from fire/smoke), and seat belt failure (split from airbag, since they co-occur but are distinct defects). Rule-based/keyword-matched, fully deterministic — stays "derived," not synthetic, per Section 5's constraint. If, after tagging the real sample, `OTHER` ends up being the largest single bucket, that's a signal the taxonomy needs another pass before locking — flag it rather than proceeding.
+
 ---
 
 ## Section 6: Phase Breakdown
