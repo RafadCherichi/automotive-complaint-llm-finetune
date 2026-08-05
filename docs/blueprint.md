@@ -30,8 +30,12 @@ Vehicle Complaints database — real consumer complaint text, existing and
 free, no synthetic/custom data. Subsample a clean few-thousand-row slice
 for training; do not attempt the full multi-million-row corpus.
 
-FINE-TUNING METHOD: QLoRA (4-bit quantized base + LoRA adapters). This is
-locked project-wide — not open for reconsideration mid-build.
+FINE-TUNING METHOD: QLoRA + DoRA (4-bit quantized base + LoRA adapters,
+with use_dora=True). QLoRA is locked project-wide — not open for
+reconsideration mid-build. DoRA is a same-cost refinement on top of it
+(decomposes the weight update into magnitude and direction, converges
+faster, often matches full fine-tuning quality at the same rank) — enable
+it via the training framework's use_dora flag, no extra VRAM cost.
 
 BASE MODEL: Qwen3-8B-Instruct (Apache 2.0, open weights). Disable "thinking
 mode" — this task wants fast, deterministic extraction, not exploratory
@@ -97,16 +101,18 @@ STANDING RULES (apply across the whole portfolio, not just this project):
 | D. Mistral-7B-Instruct-v0.3 | Rejected — also well-precedented, but no continuity with Project 2's tooling/family. |
 | E. Phi-3-mini (3.8B) | Rejected — was Project 1's OOM fallback model specifically, not a primary pick; same JSON-reliability weakness as Llama-3.2-3B. |
 
-### Fine-tuning method: **QLoRA** (pre-locked, not reconsidered here)
+### Fine-tuning method: **QLoRA + DoRA** (pre-locked, not reconsidered here)
+
+**Update (verified via research):** QLoRA alone is confirmed correct for this hardware — it's the current standard default specifically for single-GPU fine-tuning when the base model doesn't fit unquantized. On structured-output tasks like this one, QLoRA/LoRA already land within a few percent of full fine-tuning, so the "full FT is secretly better" concern doesn't really apply here. **DoRA is added on top as a same-cost upgrade** — it's a training-config flag (`use_dora=True`), not a different method or extra VRAM cost, and it converges faster / often matches full fine-tuning quality at the same rank. It has effectively no downside for this project, so it's promoted from "footnote" to "locked."
 
 For the learning doc, document these alternatives even though the method itself was fixed by the project's scope:
 
 | Alternative | Why not used |
 |---|---|
-| Full fine-tuning | Needs to update all model weights in full precision — far beyond 4GB VRAM, not feasible on this hardware even on Colab's free tier for an 8B model. |
+| Full fine-tuning | Needs to update all model weights in full precision — far beyond 4GB VRAM, not feasible on this hardware even on Colab's free tier for an 8B model. Also, the quality gap vs. QLoRA is smallest on exactly this kind of structured-output task, so the cost wouldn't be well spent even with unlimited hardware. |
 | Plain LoRA (fp16/bf16, no quantization) | Base model stays unquantized in memory during training — would blow past available VRAM even training adapters-only on an 8B model. |
 | Prompt-tuning / soft prompts | Much lower capacity — unlikely to reliably learn a strict structured-output schema; better suited to simpler style/tone shifts than field-level JSON accuracy. |
-| DoRA (QLoRA + DoRA combo) | A 2026-current refinement that often matches full fine-tune quality at the same rank — worth a footnote as a "next iteration" upgrade path, not required for this pass. |
+| QLoRA without DoRA | Still a valid, widely-used baseline — but DoRA is a free quality upgrade at the same memory cost, so there's no real reason to skip it here. |
 
 ---
 
@@ -130,4 +136,61 @@ Deliverables that speak to this directly:
 
 ---
 
-Ready to start Phase 1 (NHTSA data pull + subsample + label-schema design) whenever you are.
+## Section 5: Label Strategy (how ground-truth labels get created — zero manual labeling)
+
+**Key insight to give Claude Code:** NHTSA complaint records aren't just free text — each complaint already ships with structured metadata columns alongside the narrative: a component description field, and boolean-ish flags for crash/fire/injury/death involvement, plus recall linkage. This means the target schema can largely be **derived from existing columns, not hand-labeled from scratch**:
+
+| Target field | Derivation source |
+|---|---|
+| `component` | NHTSA's own component field (may need light normalization/bucketing — e.g. collapsing near-duplicate component strings into a clean taxonomy) |
+| `defect_type` | Short categorical summary — likely needs a small taxonomy designed from the free-text narrative + component field (this is the one field most likely to need Claude Code's judgment — flag it as an options-first decision in Phase 1, not something to invent silently) |
+| `safety_risk` | Derived from crash/fire/injury/death flags — if any are present, `"yes"`, else `"no"` |
+| `severity` | Derived tiering from the same flags (e.g. death/injury → high, crash/fire without injury → medium, none → low) — exact thresholds are a Phase 1 decision, not pre-locked |
+
+This keeps the project honest against "existing data only, zero budget": labels are **derived programmatically from real NHTSA metadata**, not invented, not LLM-generated synthetic labels, and not manually annotated by Rafad. Claude Code should confirm this derivation logic explicitly (with worked examples) before generating the training set — this is what the existing Phase 1 instruction to "propose the exact JSON label schema... and show me before writing bulk code" is for.
+
+**Data sizing target:** aim for roughly 500–1,000 labeled training pairs (well within documented QLoRA norms for classification/extraction-style tasks on 7-8B models) plus a separate held-out set of 100–150 hand-spot-checked examples for the before/after eval — spot-checked by Rafad, not the full training set, to keep this from becoming a manual-labeling bottleneck.
+
+---
+
+## Section 6: Phase Breakdown
+
+| Phase | Deliverable |
+|---|---|
+| **Phase 1** | Local dev env, NHTSA data pull, label derivation logic proposed + confirmed, training set (~500-1,000 pairs) + held-out eval set (~100-150 pairs) built |
+| **Phase 2** | Colab/Kaggle QLoRA + DoRA training notebook, base model loaded in 4-bit, LoRA config (rank/alpha — options-first if nontrivial), training run, adapter saved |
+| **Phase 3** | Evaluation: baseline (zero-shot Qwen3-8B) vs. fine-tuned, on JSON validity rate + field-level accuracy over the held-out set; error analysis writeup |
+| **Phase 4** | Merge/export adapter, quantize to GGUF (Q4), verify it runs locally on the RTX 3050; build the demo (Streamlit, matching Project 2's pattern) |
+| **Phase 5** | Docs: learning docs (alternatives-considered tables in full), `pm-perspective.md`, README, final repo cleanup |
+
+---
+
+## Section 7: Repo Structure & Dependencies
+
+```
+automotive-complaint-llm-finetune/
+├── README.md
+├── .gitignore
+├── requirements.txt          # local: data prep + eval only, no training libs
+├── docs/
+│   ├── blueprint.md           (this file)
+│   ├── label-strategy.md      (Phase 1 output)
+│   ├── model-choice.md        (learning doc: alternatives tables in full)
+│   ├── eval-report.md         (Phase 3 output)
+│   └── pm-perspective.md      (Phase 5 output)
+├── data/                      # gitignored — raw NHTSA pulls + processed sets
+├── notebooks/
+│   └── train_qlora_dora.ipynb # runs on Colab/Kaggle, not local
+├── eval/
+│   └── eval_harness.py        # runs locally against the quantized model
+└── demo/
+    └── streamlit_app.py
+```
+
+**Local requirements.txt (data prep + eval only):** `pandas`, `requests`, `jsonschema` (for JSON validity checks), `llama-cpp-python` or `ollama` (for running the quantized GGUF locally in eval/demo).
+
+**Colab/Kaggle notebook dependencies (training only, never installed locally):** `unsloth`, `transformers`, `peft`, `bitsandbytes`, `trl`.
+
+---
+
+Ready to start Phase 1 (NHTSA data pull + label-derivation proposal + training/eval set construction) whenever you are.
