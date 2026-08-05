@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where python *)",
+      "Bash(curl -sI \"https://static.nhtsa.gov/odi/ffdd/cmpl/FLAT_CMPL.zip\")",
+      "Bash(curl -s \"https://api.nhtsa.gov/complaints/complaintsByVehicle?make=honda&model=accord&modelYear=2018\")",
+      "Bash(python -m venv venv)",
+      "Bash(./venv/Scripts/python.exe -m pip uninstall -y scikit-learn scipy joblib threadpoolctl -q)",
+      "Bash(./venv/Scripts/python.exe -m pip list)",
+      "Bash(curl -s \"https://api.nhtsa.gov/complaints/complaintsByVehicle?make=honda&model=accord&modelYear=2018\" -o /tmp_nhtsa_sample.json)",
+      "Bash(./venv/Scripts/python.exe -c ' *)",
+      "Bash(curl -s 'https://api.nhtsa.gov/complaints/complaintsByVehicle?make=honda&model=accord&modelYear=2018' -o C:/Users/91994/AppData/Local/Temp/claude/c--Projects-automotive-complaint-llm-finetune/5b1f66fc-73be-4fa0-bd87-c999262bc94f/scratchpad/nhtsa_sample.json)",
+      "Bash(curl -s -D - -o /dev/null -H \"Range: bytes=0-0\" \"https://static.nhtsa.gov/odi/ffdd/cmpl/FLAT_CMPL.zip\")",
+      "Bash(curl -s -o data/raw/FLAT_CMPL.zip \"https://static.nhtsa.gov/odi/ffdd/cmpl/FLAT_CMPL.zip\")",
+      "Bash(curl -s https://static.nhtsa.gov/odi/ffdd/cmpl/CMPL.txt -o C:/Users/91994/AppData/Local/Temp/claude/c--Projects-automotive-complaint-llm-finetune/5b1f66fc-73be-4fa0-bd87-c999262bc94f/scratchpad/CMPL_dict.txt)",
+      "Bash(./venv/Scripts/python.exe scripts/tally_components.py)",
+      "Bash(./venv/Scripts/python.exe scripts/build_dataset.py)",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 60\")",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 90\")",
+      "Bash(./venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('scripts/build_dataset.py'\\).read\\(\\)\\)\")",
+      "Bash(curl -sI \"https://huggingface.co/Qwen/Qwen3-8B/resolve/main/tokenizer_config.json\")",
+      "Bash(./venv/Scripts/python.exe -m pip install \"transformers\" -q --no-deps)",
+      "Bash(./venv/Scripts/python.exe -m pip install \"tokenizers\" \"huggingface_hub\" \"safetensors\" \"regex\" \"pyyaml\" \"filelock\" \"packaging\" -q)",
+      "Bash(./venv/Scripts/python.exe -m pip install \"tokenizers<=0.23.0,>=0.22.0\" typer -q)",
+      "Bash(./venv/Scripts/python.exe -c \"import transformers; print\\('transformers', transformers.__version__\\)\")",
+      "Bash(./venv/Scripts/python.exe -c \"import torch\")",
+      "Bash(./venv/Scripts/python.exe scripts/check_seq_lengths.py)"
+    ]
+  }
+}

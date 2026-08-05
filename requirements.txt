@@ -1,0 +1,17 @@
+# Phase 1: data prep + eval harness only (per blueprint.md Section 7).
+# No torch/training deps here — those only run on Colab/Kaggle GPUs.
+pandas
+requests
+jsonschema
+tqdm
+
+# Tokenizer-only (no torch, no model weights, CPU text processing) — used by
+# scripts/check_seq_lengths.py to check real token-length distribution against
+# Qwen3's tokenizer before locking Phase 2's max_sequence_length. Not a training
+# dependency: no GPU use, no model loading, just vocabulary/BPE text splitting.
+transformers
+tokenizers>=0.22.0,<=0.23.0
+safetensors  # verifying downloaded adapter weight files (parses tensor headers, no GPU/torch needed)
+
+# llama-cpp-python or ollama added later (Phase 3/4) once we're running the quantized
+# GGUF model locally for eval/demo — not needed for Phase 1 data prep.

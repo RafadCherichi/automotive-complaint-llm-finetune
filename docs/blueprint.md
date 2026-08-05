@@ -59,6 +59,16 @@ STANDING RULES (apply across the whole portfolio, not just this project):
 2. Learning docs must cover: alternatives considered, reasoning for the
    final pick, and a note on when the alternative would've been the
    better choice — exhaustive learning, not just documenting the pick.
+   Additionally (new standard, applies from this project onward): docs
+   need a "How to read this project" reading-order index at the top of
+   the README (README summary -> pm-perspective.md -> design-decisions/
+   architecture doc -> learning docs -> code walkthrough -> eval report),
+   and every learning-doc concept entry must be a 3-part "concept card":
+   (1) generic explanation of the concept, (2) how it's specifically used
+   in THIS project with a direct code/file reference (not just prose),
+   (3) when the alternative would've been the better choice. This is
+   what makes the docs teach the concept AND let Rafad defend the
+   project as if he built every line himself, not just recognize it.
 3. Every project needs a deliberate PM-relevant angle, framed in
    product/decision-making terms, built in from the start.
 4. Proactively check for free/trial external resources when relevant
