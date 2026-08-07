@@ -185,7 +185,7 @@ Additions vs. the original 9-category proposal: unintended acceleration (histori
 | **Phase 2** | Colab/Kaggle QLoRA + DoRA training notebook, base model loaded in 4-bit, LoRA config (rank/alpha — options-first if nontrivial), training run, adapter saved |
 | **Phase 3** | Evaluation: baseline (zero-shot Qwen3-8B) vs. fine-tuned, on JSON validity rate + field-level accuracy over the held-out set; error analysis writeup |
 | **Phase 4** | Merge/export adapter, quantize to GGUF (Q4), verify it runs locally on the RTX 3050; build the demo (Streamlit, matching Project 2's pattern) — **paused, see 6a** |
-| **Phase 5** | Docs: learning docs (alternatives-considered tables in full), `pm-perspective.md`, README, final repo cleanup — **not started** |
+| **Phase 5** | Docs: learning docs (alternatives-considered tables in full), `pm-perspective.md`, README, final repo cleanup — **docs done** (written ahead of Phase 4 resuming, since Phase 4 is an infrastructure hurdle, not a modeling gap — see Section 6a); final repo cleanup still open |
 
 ---
 
@@ -230,16 +230,29 @@ automotive-complaint-llm-finetune/
 ├── .gitignore
 ├── requirements.txt          # local: data prep + eval only, no training libs
 ├── docs/
-│   ├── blueprint.md           (this file)
-│   ├── label-strategy.md      (Phase 1 output)
-│   ├── model-choice.md        (learning doc: alternatives tables in full)
-│   ├── eval-report.md         (Phase 3 output)
-│   └── pm-perspective.md      (Phase 5 output)
+│   ├── blueprint.md               (this file)
+│   ├── pm-perspective.md          (Phase 5 output — business case)
+│   ├── learning/                  (Phase 5 output — concept cards, one file per decision)
+│   │   ├── 01_qlora_dora_vs_alternatives.md
+│   │   ├── 02_base_model_choice.md
+│   │   ├── 03_data_access_bulk_vs_api.md
+│   │   ├── 04_label_derivation_from_existing_flags.md
+│   │   ├── 05_hyperparameter_choices.md
+│   │   └── 06_class_imbalance_three_rounds.md
+│   ├── label-strategy.md          (Phase 1 output)
+│   ├── training-hyperparameters.md (Phase 2 output — locked config + 3-round results)
+│   ├── code-walkthrough.md        (Phase 5 output — code tour, file by file)
+│   └── eval-report.md             (Phase 3 output)
 ├── data/                      # gitignored — raw NHTSA pulls + processed sets
 ├── notebooks/
-│   └── train_qlora_dora.ipynb # runs on Colab/Kaggle, not local
+│   ├── train_qlora_dora.ipynb            # runs on Colab/Kaggle, not local
+│   ├── eval_baseline_vs_finetuned.ipynb  # runs on Colab/Kaggle, not local
+│   └── merge_and_quantize_gguf.ipynb     # Phase 4, paused — see Section 6a
 ├── eval/
-│   └── eval_harness.py        # runs locally against the quantized model
+│   └── eval_results_v1/v2/v3.json  # full graded predictions, all 3 training rounds
+├── models/                    # gitignored (weights) except Modelfile, README.md
+│   ├── Modelfile
+│   └── README.md
 └── demo/
     └── streamlit_app.py
 ```

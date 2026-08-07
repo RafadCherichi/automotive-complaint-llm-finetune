@@ -8,6 +8,31 @@ unmodified base model, honestly, including where it's still weak.
 Project 3 of a 5-project PM+ML portfolio. Full locked scope and standing rules:
 [`docs/blueprint.md`](docs/blueprint.md).
 
+## How to read this project
+
+In order, each building on the last:
+
+1. **This README** — quick summary and headline results (below).
+2. [`docs/pm-perspective.md`](docs/pm-perspective.md) — the business case: who this is
+   for, what a miss costs vs. a false alarm, and why precision/recall (not accuracy) is
+   the number that matters here.
+3. [`docs/blueprint.md`](docs/blueprint.md) — the full locked design: task, dataset,
+   base model, fine-tuning method, hardware constraints, and every open decision with
+   its alternatives and reasoning.
+4. **[`docs/learning/`](docs/learning/)** — the ML concepts behind every real decision
+   (`01` through `06`, in order), taught from scratch (no assumed background), each as
+   a 3-part card: what the concept is, exactly how this project uses it with a real
+   code reference, and when the alternative would have actually been the better choice.
+5. [`docs/label-strategy.md`](docs/label-strategy.md) — how the training data and
+   labels were actually built, bugs found and fixed along the way.
+6. [`docs/training-hyperparameters.md`](docs/training-hyperparameters.md) — how
+   training actually ran across three real rounds, with real results, not just the
+   locked hyperparameter table.
+7. [`docs/code-walkthrough.md`](docs/code-walkthrough.md) — a guided tour of the actual
+   code, file by file and function by function.
+8. [`docs/eval-report.md`](docs/eval-report.md) — the final evaluation evidence, the
+   honest error analysis, and why the shipped model is the one it is.
+
 ## Status
 
 **Phases 1-3 done and shipped.** The trained model, the full base-vs-fine-tuned
@@ -45,7 +70,7 @@ production-mitigation recommendation are in the eval report.
 | 2 — Training | QLoRA + DoRA on Qwen3-8B via Unsloth, locked hyperparameters, 3 training rounds on Kaggle as the Phase 3 diagnosis drove real data fixes | [`training-hyperparameters.md`](docs/training-hyperparameters.md) |
 | 3 — Evaluation | Base vs. fine-tuned on the held-out set across all 3 rounds; diagnosed a severity-tier blind spot, fixed it, found a new tradeoff, and made the shipping call with evidence, not a guess | [`eval-report.md`](docs/eval-report.md) |
 | 4 — Local demo | Paused — see below | — |
-| 5 — Docs polish | Not started | — |
+| 5 — Docs | This README, `pm-perspective.md`, `docs/learning/` (6 concept cards), `code-walkthrough.md` | see [How to read this project](#how-to-read-this-project) |
 
 ## Repo structure
 
@@ -57,7 +82,9 @@ data/processed/      train.jsonl / eval.jsonl (gitignored — real NHTSA text, n
 models/              trained adapters (gitignored — see docs for which one shipped)
 eval/                eval_results_v1/v2/v3.json — full graded predictions, all 3 rounds
 demo/                streamlit_app.py — ready to run once a .gguf file exists
-docs/                blueprint.md, label-strategy.md, training-hyperparameters.md, eval-report.md
+docs/                blueprint.md, pm-perspective.md, label-strategy.md,
+                     training-hyperparameters.md, code-walkthrough.md, eval-report.md
+docs/learning/       01-06: concept cards, one per real project decision
 ```
 
 ## What's left (Phase 4)
