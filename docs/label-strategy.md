@@ -153,29 +153,177 @@ fabricated, just weighted sampling toward the rare class. Sampling uses reservoi
 sampling over the *entire* file (not filtered to hand-picked makes/models), so there's
 no selection bias toward whichever vehicles happened to get queried.
 
-## Final dataset
+## Phase 3 finding: `high` severity had a within-class blind spot (train.jsonl v2)
+
+The Phase 3 before/after eval (`eval/eval_results_v1.json`, the v1 run) found the
+fine-tuned model never predicted `severity: high` correctly — all 18 actual-`high` eval examples landed
+on `medium` or `low`. Reading the missed examples showed a specific pattern, not random
+noise: the model had learned **"crash/fire mentioned → medium"** as a shortcut, and
+under-weighted injury-only language when no crash/fire flag was present — even complaints
+with explicit injury text ("suffered heavy bruising," "sustained injuries... required
+medical attention") got called `medium`.
+
+The root cause was training-data composition, not the derivation logic: `severity: high`
+splits into two real sub-patterns —
+
+- **Sub-pattern A** — `injured>0` or `deaths>0`, but `crash=False` and `fire=False`
+  (injury/death with no crash or fire language to key off of)
+- **Sub-pattern B** — `injured>0`/`deaths>0` **and** `crash=True` or `fire=True`
+
+In the original `train.jsonl`, the 99 `high` examples split 28 sub-pattern-A : 71
+sub-pattern-B (28%) — sub-pattern B's crash/fire language dominated the tier, and the
+model generalized from the majority pattern.
+
+**Fix (within-class, not a dataset-wide rebalance):** re-scanned the full flat file for
+sub-pattern-A candidates not already used in `train.jsonl` or `eval.jsonl`
+(`scripts/find_injury_only_high.py`) and found **16,040 available** — no scarcity
+problem, this was purely a sampling-luck issue in the original 800-row draw. Added 57 of
+them to `train.jsonl` and removed 57 randomly-selected `medium` examples to compensate
+(`scripts/rebuild_train_injury_fix.py`, seed=42), holding the total dataset size (800),
+the overall `safety_risk: yes` rate (256, 32.0%), and `low` (544, completely untouched)
+exactly as they were. Only the `high` tier's internal composition changed:
+
+| | before | after |
+|---|---|---|
+| `high` total | 99 | 156 |
+| — sub-pattern A (injury-only) | 28 (28.3%) | 85 (54.5%) |
+| — sub-pattern B (crash/fire + injury) | 71 (71.7%) | 71 (45.5%) |
+| `medium` | 157 | 100 |
+| `low` | 544 | 544 (unchanged) |
+| `safety_risk: yes` | 256 (32.0%) | 256 (32.0%) |
+
+`eval.jsonl` was not read or written by this fix — confirmed byte-identical
+(sha256 unchanged) before and after, so the before/after model comparison in Phase 3
+stays apples-to-apples on the exact same 140 examples. The original `train.jsonl` is
+preserved at `data/processed/train_v1_backup.jsonl` (gitignored, local only) in case this
+needs to be reverted or compared against.
+
+This is documented as a real finding, not smoothed over: the original stratification
+(Section 5a) correctly targeted the `safety_risk`-level 97/3 imbalance, but didn't
+anticipate that a *second*, subtler imbalance existed one level down, inside the `high`
+tier itself. Worth remembering for any future label-strategy work — checking the
+top-level class balance isn't sufficient when a field has internally distinct sub-patterns
+that a model can shortcut between.
+
+## Phase 3 finding #2: the v2 fix over-corrected (train.jsonl v3 — additive restore)
+
+Retraining on v2's `train.jsonl` fixed the diagnosed problem — `severity: high` accuracy
+went from 0% to 88.9% — but the Phase 3 rerun found a new regression: `severity: medium`
+accuracy collapsed from 70.4% to 14.8%. The model's "I'm not sure" default shifted from
+over-predicting `medium` (v1) to over-predicting `high` (v2), rather than actually
+learning to tell the two apart. Full evidence with concrete misclassified examples,
+narrative text, and the crash/fire/injury flags for each is in
+`docs/eval-report.md` Sections 2-3 — roughly a third looked like genuine overcorrections
+(narratives that explicitly said "no injuries" or "1 mph impact" still got called
+`high`), and about half looked like defensible near-misses (dramatic language —
+structural failure, fire, a child involved — without a recorded injury).
+
+**Root cause, this time: absolute example count, not composition.** The v2 rebuild
+*swapped* 57 `medium` examples out to make room for 57 new `high` examples — correct for
+fixing the sub-pattern imbalance inside `high`, but it also dropped `medium`'s raw count
+from 157 to 100, below the ~200–500-per-class range that's the standard target for
+structured-extraction QLoRA fine-tunes on a 7-8B model. A class with too few examples is
+prone to exactly this kind of unstable, over-generalized behavior.
+
+**Fix (additive only — this is a restore, not another swap):** re-scanned the full flat
+file for `medium`-pattern candidates (`crash=True` or `fire=True`, `injured=0`,
+`deaths=0`) not already used anywhere in `train.jsonl` or `eval.jsonl`
+(`scripts/grow_medium_tier.py`) and found **85,259 available**. Added 100 of them
+straight on top of the existing 800 rows — **nothing was removed or swapped this time**,
+unlike the v2 fix. `low` (544) and `high` (156, the tier the previous fix already
+repaired) are completely untouched.
+
+| | v2 | v3 (this fix) |
+|---|---|---|
+| `low` | 544 | 544 (unchanged) |
+| `medium` | 100 | **200** |
+| `high` | 156 | 156 (unchanged) |
+| **total train** | 800 | **900** |
+| `safety_risk: yes` | 256 (32.0%) | 356 (39.6%) |
+
+**This deliberately moves outside Section 5a's original 30–35% `safety_risk: yes` band**
+(now 39.6%) — a direct, expected consequence of adding only positive-class (`medium`)
+examples without removing anything to compensate, as explicitly instructed. This is a
+considered tradeoff, not an oversight: the per-class-count target (200–500 per class) is
+the more relevant constraint for this specific fix, and the original 30–35% band was
+calibrated before this second, class-count-specific problem was known. Still within
+Section 6's locked ~500–1,000 total training-pairs range (900).
+
+`eval.jsonl` untouched again — confirmed byte-identical (same sha256 as every prior
+round) — so all three fine-tuned models (v1, v2, v3) remain comparable on the exact same
+140 examples.
+
+This was the last planned retrain round for this project, as decided going in — and the
+result justified stopping. See below for what actually happened.
+
+## Final decision: three rounds compared, v2 shipped (not v3)
+
+v3 trained and evaluated cleanly, but the result argued against itself. Full metrics in
+`docs/training-hyperparameters.md`; the data-relevant summary:
+
+| | v1 (800 rows) | v2 (800 rows, swapped) | v3 (900 rows, grown) |
+|---|---|---|---|
+| `severity: high` accuracy | 0.0% | **88.9%** | 0.0% |
+| `severity: medium` accuracy | 70.4% | 14.8% | 59.3% |
+| `safety_risk` recall | 77.8% | **88.9%** | 68.9% |
+| `safety_risk` precision | 68.6% | 71.4% | **86.1%** |
+
+Growing `medium` from 100 to 200 examples (the v3 fix, aimed at the standard
+200–500-per-class QLoRA range) improved `medium`'s own accuracy some (14.8% → 59.3%,
+still below v1's 70.4%) but **undid v2's high-severity fix in the process** — `high`
+accuracy fell straight back to 0%, the same failure v1 had. v3 does win on blended
+accuracy and on `safety_risk` precision, but a model that never correctly identifies a
+real high-severity complaint isn't an acceptable safety-triage tool regardless of how
+clean its other numbers look.
+
+**v2 shipped.** Its adapter is copied to `models/qwen3-8b-automotive-complaint-lora-FINAL/`
+for Phase 4. v1 and v3 adapters are kept locally as superseded experiments, not deleted
+— see `models/README.md`.
+
+**Important distinction for anyone reading this later:** the `train.jsonl` currently on
+disk holds **v3's** 900-row dataset (the most recent build), *not* the data that
+produced the shipped v2 model. The data that actually trained the shipped model is
+preserved at `data/processed/train_v2_backup.jsonl`. This is intentional — `train.jsonl`
+tracks the latest data-side experiment, while the shipped model is pinned by its own
+adapter files, independent of what `train.jsonl` currently contains. If Phase 4 or later
+work ever needs to reproduce the shipped model's training data exactly, use
+`train_v2_backup.jsonl`, not `train.jsonl`.
+
+**Open question left for any future iteration, not resolved here:** why growing
+`medium`'s raw count didn't cleanly fix `medium` accuracy, and why it interfered with
+`high` at all, isn't fully understood — the three severity tiers may not be cleanly
+separable by example count alone within this rule-derived label scheme. Recorded
+honestly as a limitation rather than chased with a fourth round, per the decision to
+stop after three.
+
+## Dataset snapshot (v3 — most recent build; NOT what the shipped v2 model was trained on, see above)
 
 | | rows | safety_risk: yes |
 |---|---|---|
-| `data/processed/train.jsonl` | 800 | 256 (32.0%) |
+| `data/processed/train.jsonl` | 900 | 356 (39.6%) |
 | `data/processed/eval.jsonl` | 140 | 45 (32.1%) |
 
-No overlap between the two sets (checked by `ODINO`).
+No overlap between the two sets (checked by `ODINO`). Backups of every prior version are
+kept locally (gitignored): `train_v1_backup.jsonl` (original Phase 1 build) and
+`train_v2_backup.jsonl` (after the injury-only-high fix, before the medium restore).
 
-**severity:** 68.0% low / 19.6% medium / 12.4% high (combined).
+**severity (train, v3):** 60.4% low / 22.2% medium / 17.3% high.
+**severity (eval, unchanged throughout):** 67.9% low / 19.3% medium / 12.9% high.
 
-**defect_type** (combined, final, after both bug fixes): FIRE/SMOKE 13.6%, BRAKE
-FAILURE 11.6%, OTHER 10.2%, AIRBAG NON-DEPLOYMENT 9.6%, ELECTRICAL FAULT 9.0%,
-TRANSMISSION FAILURE 8.2%, STEERING LOSS 8.0%, ENGINE/STALLING/POWER LOSS 7.4%, FUEL
-SYSTEM LEAK 4.8%, UNINTENDED ACCELERATION 4.8%, STRUCTURAL/CORROSION 3.8%, SUSPENSION
-FAILURE 3.4%, TIRE/WHEEL FAILURE 2.3%, SOFTWARE/INFOTAINMENT/ADAS 1.8%, SEAT BELT
-FAILURE 1.4%.
+**defect_type** (combined, v3, recomputed after the medium restore): FIRE/SMOKE 15.3%,
+BRAKE FAILURE 11.5%, OTHER 10.4%, AIRBAG NON-DEPLOYMENT 9.3%, ELECTRICAL FAULT 8.5%,
+TRANSMISSION FAILURE 7.9%, STEERING LOSS 7.4%, ENGINE/STALLING/POWER LOSS 7.1%,
+UNINTENDED ACCELERATION 4.8%, FUEL SYSTEM LEAK 4.4%, STRUCTURAL/CORROSION 4.1%,
+SUSPENSION FAILURE 3.7%, TIRE/WHEEL FAILURE 2.4%, SOFTWARE/INFOTAINMENT/ADAS 1.6%, SEAT
+BELT FAILURE 1.5%. `OTHER` still not the largest bucket (FIRE/SMOKE is, by a wide margin
+now that more crash/fire-flagged `medium` examples are in the mix) — no taxonomy-pass
+flag triggered.
 
-**component** (combined): ELECTRICAL SYSTEM 15.9%, ENGINE 13.1%, AIR BAGS 12.9%,
-BRAKES 8.0%, POWER TRAIN 7.1%, STEERING 6.3%, FUEL SYSTEM 5.5%, STRUCTURE 4.4%,
-VEHICLE SPEED CONTROL 4.3%, OTHER 3.5%, EXTERIOR LIGHTING 3.1%, SUSPENSION 2.8%,
-TIRES/WHEELS 2.6%, ADAS/DRIVER ASSIST 2.6%, SEATS 2.1%, VISIBILITY 2.1%, EQUIPMENT
-1.8%, SEAT BELTS 1.4%, LATCHES/LOCKS/LINKAGES 0.7%.
+**component** (combined, v3): ELECTRICAL SYSTEM 16.2%, ENGINE 13.0%, AIR BAGS 12.5%,
+BRAKES 8.5%, POWER TRAIN 7.4%, STEERING 6.0%, FUEL SYSTEM 4.9%, VEHICLE SPEED CONTROL
+4.4%, STRUCTURE 4.4%, OTHER 3.8%, SUSPENSION 3.0%, EXTERIOR LIGHTING 2.6%, TIRES/WHEELS
+2.4%, ADAS/DRIVER ASSIST 2.4%, SEATS 2.2%, VISIBILITY 2.1%, SEAT BELTS 1.5%, EQUIPMENT
+1.5%, LATCHES/LOCKS/LINKAGES 1.1%.
 
 ## Record schema (`data/processed/{train,eval}.jsonl`)
 
@@ -217,3 +365,9 @@ harness.
   `UNINTENDED ACCELERATION` by default. Reliably catching this would require parsing
   and comparing the two numbers in the sentence — out of scope for a keyword-rule
   system. Found during the Phase 1 stratified spot-check; documented rather than fixed.
+- **`severity` tiers may not be cleanly separable by training-example count alone.**
+  Growing `medium` from 100 to 200 examples (the v3 fix) improved `medium` accuracy some
+  but unexpectedly regressed `high` accuracy back to 0% — the same failure the v2 fix
+  had solved. Why adding more `medium` data interferes with the model's `high`-tier
+  behavior isn't understood; this shipped as an open question rather than a fourth
+  retrain round. See "Final decision" above for the full three-round comparison.

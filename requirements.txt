@@ -13,5 +13,7 @@ transformers
 tokenizers>=0.22.0,<=0.23.0
 safetensors  # verifying downloaded adapter weight files (parses tensor headers, no GPU/torch needed)
 
-# llama-cpp-python or ollama added later (Phase 3/4) once we're running the quantized
-# GGUF model locally for eval/demo — not needed for Phase 1 data prep.
+# Phase 4: local demo, calling Ollama's REST API (Ollama itself is a separate native
+# app install, not a pip package — see docs/blueprint.md). No torch/GPU deps added here;
+# Ollama does the model inference out-of-process, Streamlit just calls its HTTP API.
+streamlit
