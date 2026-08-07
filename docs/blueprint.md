@@ -4,7 +4,7 @@
 **Rank:** 3 of 5 — completes the "LLM competency triangle" (RAG → Agents → Fine-tuning)
 **Predecessors:** Project 1 (RAG Feedback Analyzer, done) · Project 2 (Agentic Text-to-SQL, done)
 **Worker:** Claude Code
-**Status: all open decisions locked. Ready to start.**
+**Status: Phases 1-3 complete and shipped. Phase 4 (local GGUF demo) paused — infrastructure hurdle, not a modeling gap. See Section 6a.**
 
 ---
 
@@ -184,8 +184,41 @@ Additions vs. the original 9-category proposal: unintended acceleration (histori
 | **Phase 1** | Local dev env, NHTSA data pull, label derivation logic proposed + confirmed, training set (~500-1,000 pairs) + held-out eval set (~100-150 pairs) built |
 | **Phase 2** | Colab/Kaggle QLoRA + DoRA training notebook, base model loaded in 4-bit, LoRA config (rank/alpha — options-first if nontrivial), training run, adapter saved |
 | **Phase 3** | Evaluation: baseline (zero-shot Qwen3-8B) vs. fine-tuned, on JSON validity rate + field-level accuracy over the held-out set; error analysis writeup |
-| **Phase 4** | Merge/export adapter, quantize to GGUF (Q4), verify it runs locally on the RTX 3050; build the demo (Streamlit, matching Project 2's pattern) |
-| **Phase 5** | Docs: learning docs (alternatives-considered tables in full), `pm-perspective.md`, README, final repo cleanup |
+| **Phase 4** | Merge/export adapter, quantize to GGUF (Q4), verify it runs locally on the RTX 3050; build the demo (Streamlit, matching Project 2's pattern) — **paused, see 6a** |
+| **Phase 5** | Docs: learning docs (alternatives-considered tables in full), `pm-perspective.md`, README, final repo cleanup — **not started** |
+
+---
+
+## Section 6a — Current Status (paused after Phase 3)
+
+**Phases 1-3 are complete and represent the project's core evidence — nothing about
+them is blocked or in question.** In order:
+
+- **Phase 1:** NHTSA flat-file pipeline (2.16M vehicle complaints scanned), label
+  derivation logic locked with worked examples, training/eval sets built. Full detail
+  and two real bugs found + fixed during a targeted spot-check: `docs/label-strategy.md`.
+- **Phase 2:** QLoRA + DoRA training notebook, locked hyperparameters, three full
+  training rounds run on Kaggle (v1, v2, v3) as the Phase 3 diagnosis process required
+  data fixes and retrains. Full detail: `docs/training-hyperparameters.md`.
+- **Phase 3:** Base-vs-fine-tuned evaluation on a fixed 140-example held-out set across
+  all three rounds, honest error analysis, a measured (not assumed) production
+  mitigation recommendation. **v2 is the shipped model** — the only round that fixed
+  `severity: high` detection (0% → 88.9% accuracy) while keeping the best `safety_risk`
+  recall (88.9%), the number the project's safety-triage framing depends on most. Full
+  detail, including where the model is still weak and why: `docs/eval-report.md`.
+
+**Phase 4 (local GGUF quantization + Streamlit demo) is paused, not abandoned, and not
+because of a modeling problem.** The trained model (shipped, verified complete), the
+full evaluation, and the demo application code are all done. What remains is purely a
+local-packaging step: converting the shipped adapter into a quantized GGUF file that
+runs on the RTX 3050. This step has hit repeated cloud-infrastructure friction —
+Kaggle's fixed 20GB disk limit couldn't fit the merge+conversion pipeline's peak disk
+usage, and after moving to Colab for its larger disk, the from-source llama.cpp build
+was OOM-killed by unrestricted parallel compilation. Both were diagnosed and fixed in
+`notebooks/merge_and_quantize_gguf.ipynb` (disk-space staging, verified error handling,
+capped build parallelism), but the fixes haven't been confirmed against a real run yet.
+**Ready to resume from an improved starting point whenever picked back up** — see
+`README.md` for exactly what's left.
 
 ---
 
