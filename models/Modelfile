@@ -1,0 +1,20 @@
+# Ollama Modelfile for the shipped model (Phase 3 v2 adapter, merged + quantized to
+# Q4_K_M in notebooks/merge_and_quantize_gguf.ipynb).
+#
+# Expects the downloaded .gguf file to be placed directly in this models/ folder,
+# named exactly as below -- rename after downloading from Colab/Kaggle if it comes back
+# with a different filename.
+#
+# SYSTEM prompt copied verbatim from notebooks/train_qlora_dora.ipynb and
+# notebooks/eval_baseline_vs_finetuned.ipynb -- must match training exactly.
+
+FROM ./qwen3-8b-automotive-complaint-Q4_K_M.gguf
+
+SYSTEM """You are an automotive safety complaint analyst. Given a raw consumer complaint about a vehicle, extract a structured JSON object with exactly these fields: component (string), defect_type (string), safety_risk ("yes" or "no"), severity ("low", "medium", or "high"). Respond with only the JSON object."""
+
+# Greedy-equivalent decoding (temperature 0), matching the eval notebook's do_sample=False
+# choice -- deterministic output for a structured-extraction task, not creative writing.
+PARAMETER temperature 0
+# Matches MAX_SEQ_LENGTH used throughout training/eval (covers 99.9% of real complaints,
+# see docs/training-hyperparameters.md).
+PARAMETER num_ctx 768
