@@ -371,3 +371,219 @@ harness.
   had solved. Why adding more `medium` data interferes with the model's `high`-tier
   behavior isn't understood; this shipped as an open question rather than a fourth
   retrain round. See "Final decision" above for the full three-round comparison.
+
+## Round 4: text-supported training-label correction
+
+Two audits after v2 shipped (`docs/eval-report.md` Section 6, `docs/learning/06_...md`
+Section 4) found that some `safety_risk`/`severity` labels — derived from NHTSA's
+*structured* flags (`CRASH`/`FIRE`/`INJURED`/`DEATHS`) — are contradicted by the
+*narrative text*, which is all the model ever sees. 57% of the shipped model's
+`safety_risk` errors trace to exactly this: rows where the label says one thing and the
+text says another. Round 4 corrects the subset of `train.jsonl` where that contradiction
+is clear and unambiguous, and adds three new text-derived fields
+(`crash_described`, `fire_described`, `injury_described`) to the training target.
+`data/processed/eval.jsonl` was **not** touched — see `docs/eval-report.md`'s Round 4
+section for the parallel "text-consistent" reporting layer used only for evaluation, never
+for training.
+
+### Methodology: automated audit → two regex fix rounds → hand review
+
+1. **Automated pass.** `scripts/text_support_audit.py`'s already-validated lexicon (4
+   alarm categories: injury, crash, fire, control-loss; negation-aware) was run against
+   all 900 `train.jsonl` rows. A row was a **DOWNGRADE** candidate if the label says
+   alarm (`safety_risk: yes` / `severity` above `low`) but no alarm category fired and no
+   hedge (hypothetical/recall) language was present either — a genuinely clean
+   narrative. It was an **UPGRADE** candidate if the label says no-alarm but a real,
+   non-hedge alarm category fired.
+2. **Round 1 fix.** The first automated pass produced 85 upgrade candidates. Reading a
+   sample found most were driven by near-miss ("almost caused a crash") or hypothetical
+   ("could result in," a recall notice's boilerplate) language that the audit's original,
+   softer bar ("does this sound alarming enough to question a label") had let through.
+   Fix: require UPGRADE, like DOWNGRADE already did, to have **no co-occurring hedge
+   language** — cut the pool from 85 to 32.
+3. **Round 2 fix.** Re-reading the 32 found a second, narrower bug: negation only
+   checked "avoided"/"prevented" *after* a match ("an accident was avoided"), not
+   *before* it ("**narrowly avoided** an accident"). Fixed by adding both words to the
+   pre-match negation trigger list too.
+4. **Hand review.** After two fix rounds the pool was down to 32 rows but still ~25–28%
+   false positives — new bug classes kept surfacing on each rerun (ADAS/safety-feature
+   *names* like "forward collision warning" matching on the word "collision"; hypothetical
+   phrasing like "would/can result in," "in order to prevent" not fully covered by the
+   hedge list). At 32 rows, hand-reviewing every one individually was cheaper and more
+   reliable than chasing a fourth regex bug class. Each of the 32 was read in full and
+   given an explicit KEEP/REJECT verdict.
+
+### The finding: keyword matching is reliable for auditing, not for rewriting ground truth
+
+This is a real methodological result, not just a bug-fix log. The same lexicon that
+produced solid, defensible numbers for the Section 6 *audit* (measuring what fraction of
+labels are text-supported, for reporting) was not precise enough to safely *rewrite*
+labels at 32-candidates-and-shrinking scale, even after two targeted fix rounds. Every
+fix that closed one gap opened visibility into the next: broadening negation surfaced a
+feature-name collision problem; excluding hedge surfaced a "the regex matched a system
+name, not an event" problem. A third fix round (a tighter structural gap for the "hit
+<object>" pattern) was tried and **reverted** after regression-testing showed it broke 6
+genuine collision matches ("hit the back of another vehicle," "hit a telephone pole,"
+"hit a parked car," ...) for every 1 false positive it repaired — a worse trade, caught
+only because every fix in this project gets regression-tested against known-good cases
+before being trusted. The pattern across all of this: **keyword detection is well-suited
+to flagging candidates for review and reporting aggregate statistics (where a few percent
+of noise averages out), but not to unattended, row-by-row ground-truth correction at this
+sample size, where each remaining error is a specific, visible wrong label.** Below ~50
+candidate rows, hand review is both cheaper and more reliable than continuing to patch
+the detector.
+
+### Final corrected counts
+
+Out of 900 `train.jsonl` rows, **38 were corrected** (4.2%):
+
+| disposition | rows | action |
+|---|---|---|
+| DOWNGRADE (automated, zero false positives found across two review rounds) | 29 | `safety_risk`/`severity` corrected to no-alarm/`low` |
+| UPGRADE (hand-reviewed KEEP, out of 32 candidates) | 9 | `safety_risk`/`severity` corrected to alarm/`medium` (none had a confirmed real injury, so none became `high`) |
+| UPGRADE hand-reviewed REJECT | 23 | left unchanged — near-miss, hypothetical, or feature-name false match |
+| Exempted from downgrade (NHTSA `injured>0` or `deaths>0`) | 31 | left unchanged — see safety exemption below |
+| Hedge-ambiguous (either direction) | 69 | left unchanged — genuinely unclear, not guessed on |
+| Already text-consistent | 739 | left unchanged |
+
+**Safety exemption:** a row is never downgraded if NHTSA's own metadata shows
+`injured>0` or `deaths>0`, regardless of what the text audit finds — the injury lexicon
+has no dedicated death-language detection (words like "killed," "fatal," "deceased"
+aren't in it), and trusting an absent keyword match over a documented fatality/injury
+would be reckless for a safety-triage system. 31 rows hit this exemption; 4 of them have
+`deaths>0` and `injured=0`.
+
+**The 2 borderline hand-review calls, both rejected:**
+- odino 725821 — hub/rotor described as genuinely hot ("touching lug nuts will burn
+  finger"), but phrased predictively ("will burn"), not as something that already
+  happened ("I was burned"). Rejected for consistency with the "did this actually happen"
+  standard used on all 32 rows, not a separate, softer bar for physically-plausible cases.
+- odino 11184847 — a real past crash is mentioned, but as unrelated backstory for a
+  headlamp-defect complaint (the crash already happened, was repaired, and isn't the
+  subject of this complaint). Rejected rather than introduce a new "is this the
+  complaint's main subject" criterion partway through the review.
+
+### New atomic fields: `crash_described`, `fire_described`, `injury_described`
+
+Three booleans added to the training target, text-derived (not from NHTSA metadata):
+- For the **32 hand-reviewed rows**: set from the hand-reviewed verdict directly, not a
+  fresh automated run — the entire point of hand review was that the automated detector
+  was wrong on these specific rows; re-running it would let the same bugs back in through
+  the new fields.
+- For the **other 868 rows**: set from the (bug-fixed, as of this round) automated
+  detector directly. This is a known, carried-forward limitation — these rows were not
+  cheap enough to hand-review at full scale, so some of the same noise categories found
+  in the 32-row pool (hypothetical phrasing, feature-name collisions) likely remain,
+  unquantified, in this larger set. Flagged honestly rather than implied to be
+  hand-review-quality.
+
+Each row also carries a new `label_source` field (`text_corrected_downgrade`,
+`text_corrected_upgrade_handreviewed`, `original_exempted_high_stakes`,
+`original_downgrade_hedge_ambiguous`, `original_upgrade_hedge_ambiguous`,
+`original_handreviewed_reject`, or `original_text_consistent`) — an audit trail so any
+future error analysis can immediately tell whether a given row's label was touched by
+this round, matching this project's existing pattern of keeping metadata (like
+`component_raw`) for traceability rather than silently discarding it.
+
+**File:** `data/processed/train_v4.jsonl` (new file — `train.jsonl`, the v3 dataset used
+by every prior round, is left in place untouched for reference/reproducibility).
+Built by `scripts/build_train_v4.py`; the review process itself is in
+`scripts/round4_label_correction_analysis.py` (the automated dry-run + hand-review sample
+generator).
+
+### The parallel eval reporting layer
+
+The same automated-audit-then-hand-review process was applied to the 140-row
+`eval.jsonl` too, but strictly for **reporting**, never for training or as a change to
+the file itself — `eval.jsonl` stays byte-identical, still the fixed comparison point
+across all four rounds. Being a smaller set (140 vs. 900), all 6 automated upgrade
+candidates were hand-reviewed directly, no sampling needed:
+
+- **2 KEEP** (odino 10081273 — "I heard a big explosion... my #2 coil was blown out,"
+  real; odino 871031 — "made passengers ILL and temporarily BLIND," stated as fact, one
+  of the 3 original motivating examples for this whole investigation).
+- **4 REJECT** — near-miss ("thank God I didn't crash"), hypothetical ("before he causes
+  an accident"), and feature-name ("collision control... disabled") matches, same
+  categories as the train.jsonl review.
+- Of 4 automated downgrade candidates, **1 was rejected**: odino 11685196's "the car
+  gently **ran into** the car in front of me" is a real collision — "ran into" isn't in
+  the CRASH lexicon at all, a coverage gap rather than label noise. Caught by
+  cross-referencing an earlier full read of this same row from the original medium/high
+  audit. The other 3 were confirmed genuine downgrades.
+
+**Net: 5 / 140 rows (3.6%) have an adjusted label** in the reporting layer (later revised
+to 7/140 — see v5 below). File: `data/processed/eval_text_consistent.json` (odino →
+text-consistent `safety_risk`, `severity`, and the 3 atomic fields — a side table, not a
+modified copy of `eval.jsonl`). Built by `scripts/build_eval_text_consistent.py`. Used by
+`notebooks/eval_baseline_vs_finetuned_v4.ipynb` to report a second, "adjusted ceiling"
+accuracy number alongside the official one — see `docs/eval-report.md`'s Round 4 section.
+
+### v5: a forensic v2-vs-v4 recall-drop investigation found (and fixed) a real HEDGE bug
+
+After v4 shipped, a row-by-row forensic comparison against v2 (`docs/eval-report.md`
+Section 7's `safety_risk` recall bullet) traced both of v4's "new" misses to
+`text_support_audit.py`'s `HEDGE` pattern: bare `\brecall\b` was firing on
+administrative recall mentions ("were not on recall," "no recall associated with the
+VIN") exactly the same way it fired on genuine hypothetical-risk framing ("there's a
+recall because it could catch fire") — the word alone doesn't distinguish the two.
+
+**Scan + hand-check, not assumption:** every row in `train.jsonl` and `eval.jsonl`
+where `recall` was the *sole* hedge trigger blocking a would-be correction was pulled
+and read in full — 8 train rows, 2 eval rows, all in `hedge`-blocked-DOWNGRADE
+position. **7 of 10 were clean administrative mentions.** Fixed by removing bare
+`recall` from `HEDGE` entirely (`text_support_audit.py` v5) — verified this loses no
+real detection, since the one genuine hedge+recall case already on record (the Takata
+complaint, odino 10660775) still fires via `could`/`nightmare` independently.
+
+**Two more, unrelated bugs surfaced while hand-checking those 10 rows**, both left
+unfixed (same reasoning as the v4 "hit"-gap revert — a blanket fix needs its own
+regression pass, not a same-day patch) and instead handled by one-off hand-override:
+- **Negation over-reach** (train odino 11387507): "...vehicle **did NOT immediately
+  stop AND crashed** into the rear of a second vehicle" — the 5-word negation window
+  before the match contains "NOT," which grammatically negates "stop" (a different
+  clause), not "crashed," but the window doesn't know about the "AND" clause boundary.
+  A real crash was nearly mis-downgraded because of this.
+- **CRASH lexicon coverage gap** (train odino 11702659): "caused me to **backup into**
+  a mailbox" — a real minor collision, but "back(ed)/backup into" isn't in CRASH's
+  object-noun phrasing at all.
+
+**Scope disclosure: neither negation-window bug (nor the third one found below) was
+swept for systematically across the full 900+140 rows.** All three were found
+opportunistically, as a byproduct of hand-checking the 10 recall-hedge rows and the 12
+rows the fix subsequently unblocked — not from a dedicated search for negation-window
+failures. It is very likely that both the over-reach direction (a negation word
+incorrectly spans an unrelated clause) and the too-short direction (a real negation
+sits just outside the 5-word window) affect other rows in the dataset that this
+investigation never looked at, since it was scoped to rows touched by the recall-hedge
+fix specifically, not a general audit of negation handling. This is a disclosed,
+bounded limitation of the current dataset and detector, not a claim that these are the
+only 3 rows affected — a full sweep would need its own dedicated pass, matching the
+same "regression-test before trusting a blanket fix" discipline used everywhere else in
+this project, and hasn't been done.
+
+**Rebuilding after the fix also surfaced a second-order effect worth naming explicitly:
+removing a hedge trigger doesn't just unblock downgrades, it can unblock upgrades
+too** — 10 more train rows and 2 more eval rows that were previously hidden from the
+automated scan entirely (hedge blocked them from ever being flagged as candidates) came
+into view once `recall` stopped firing. All were hand-reviewed individually, same
+standard as the original pools: 2 train KEEPs (odino 10375275, "makes me SICK when I
+get into the car" from mold — stated as fact, same standard as odino 871031; odino
+10305181, "FAILED TO STOP IN TIME AND GOT INTO AN ACCIDENT" — real, dated), 8 train
+rejects (hypothetical/future-risk framing, unrelated backstory, or a case negated in
+meaning but missed by a negation window that's this time too *short* — "I was NOT in
+any danger **or in a crash**" has "crash" 7 words after "NOT," past the 5-word reach —
+a third, opposite-direction negation bug, also not fixed today), and 2 eval rejects
+(hypothetical framing; a recall notice about a *different* vehicle model catching fire,
+not this complainant's own car).
+
+**Final v5 counts:** `train_v4.jsonl` — 42/900 rows corrected (was 38): 31 downgrade
+(was 29), 11 upgrade (was 9). `eval_text_consistent.json` — 7/140 rows corrected (was
+5): 5 downgrade (was 3), 2 upgrade (unchanged). Both rebuilt via
+`scripts/build_train_v4.py` and `scripts/build_eval_text_consistent.py`;
+`scripts/build_eval_v4.py` also rebuilt for consistency (the atomic fields for 2 newly
+hand-reviewed reject rows needed the same override, or they'd have shown
+`crash_described`/`fire_described` as incorrectly `True`). **`eval.jsonl` confirmed
+byte-identical throughout (sha256 unchanged)** — this was a ground-truth/reporting-layer
+correction only, not a retrain trigger; the already-trained v4 (epoch2) model and its
+predictions are untouched. `docs/eval-report.md`'s text-consistent numbers were
+recomputed against the corrected ground truth and updated accordingly.

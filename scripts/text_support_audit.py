@@ -36,6 +36,43 @@ check (train/eval hand-read, not just the automated pass):
   3. Negation now recognizes common contractions ("DON'T," "ISN'T," ...) and
      "nobody"/"no one" -- \bn't\b alone never matches inside a contraction since
      there's no word boundary before the "n."
+
+v4 changes, found during Round 4's training-label-correction hand-review (a much
+higher-precision bar than the original audit's "does this sound alarming enough
+to question a label" one -- rewriting ground truth needs actual described
+events, not near-misses or hypotheticals):
+  1. "avoided"/"prevented" added to NEGATION_PRE (previously POST-only) -- catches
+     "narrowly AVOIDED an accident" (trigger before the match), not just "an
+     accident was AVOIDED" (trigger after). Kept.
+  2. CRASH's "hit <object>" gap: a tightening fix was attempted and REVERTED
+     after regression-testing showed it broke 6 genuine collision matches for
+     every 1 false positive it fixed -- see the CRASH pattern's own comment for
+     the full story. Left as-is (known residual limitation, handled by hand
+     review on the one row it actually affects, not a pattern change).
+  NOTE: two more precision issues surfaced during Round 4 (ADAS/safety-feature
+  *names* like "forward collision warning" matching CRASH; hypothetical phrasing
+  like "would/can result in," "in order to prevent" not fully covered by HEDGE)
+  but were NOT fixed here either -- they were resolved by hand-reviewing the
+  affected rows individually instead, since regex was hitting diminishing
+  returns (see docs/label-strategy.md, Round 4 section: "keyword matching for
+  auditing vs. ground truth"). Left as known residual gaps in this module.
+
+v5 change, found during a forensic v2-vs-v4 recall-drop investigation (see
+docs/eval-report.md Section 7's safety_risk recall bullet):
+  1. HEDGE's bare "recall" removed -- see HEDGE's own comment for the full
+     count/reasoning (7 of 10 affected rows were administrative recall mentions
+     with no hypothetical framing; the word added no unique detection value for
+     genuine cases, only false-triggered on administrative ones).
+  NOTE: this same investigation found two more, separate bugs it did NOT fix:
+  (a) the negation window can over-reach across an unrelated clause joined by
+  "and" -- "the vehicle did NOT immediately stop AND crashed into..." reads as
+  negating "crashed," which it doesn't grammatically negate (train odino
+  11387507); (b) CRASH's object-noun list doesn't cover "back(ed)/backup into"
+  phrasing (train odino 11702659, "caused me to backup into a mailbox"). Both
+  are handled by hand-review overrides in scripts/build_train_v4.py rather than
+  a blanket pattern change -- same reasoning as the v4 "hit"-gap revert: a
+  general fix to either needs its own regression pass before being trusted
+  across the whole dataset, not a same-day patch. Left as known residual gaps.
 """
 import re
 
@@ -58,6 +95,23 @@ INJURY = re.compile(
 # "hit the consumer's vehicle" (10024802) and "hit another [vehicle]" (801596).
 # Restricted to a concrete object list (not bare "hit \w+") specifically to avoid
 # matching idioms like "hit the brakes" / "hit the gas."
+# v4 attempted fix, REVERTED: the "hit <object>" gap is a generic .{0,20}
+# character span, which can bridge OVER an unrelated intervening noun and
+# misattribute a later word as the object -- found during Round 4 hand-review,
+# train odino 11500755: "HIT A BUMP THE VEHICLE'S FRONT SUSPENSION..." matched
+# as if "vehicle" were hit, when the real object was "a bump" and "the
+# vehicle's..." starts an unrelated next clause. Tried replacing the free gap
+# with a structured (article/possessive-only) one -- but regression-testing
+# that fix against real "hit" collisions found it broke 6 genuine matches
+# ("hit the BACK OF another vehicle," "hit a TELEPHONE pole," "hit a PARKED
+# car," "hit the GARAGE wall," "hit the SIDE OF the truck," "hit a SIGN then a
+# wall") for every 1 false positive it fixed -- ordinary descriptive phrases
+# ("the back of," "a parked," compound nouns) don't fit an article-only gap.
+# Reverted: the loose gap's real-world false-positive rate is low (this is the
+# only case found across ~1,040 rows scanned so far) and a general fix that
+# breaks 6x more than it repairs is a worse trade. The one known affected row
+# is handled by hand review instead (docs/label-strategy.md, Round 4 section),
+# not a blanket pattern change. Left as a documented residual limitation.
 CRASH = re.compile(
     r"\bcrash|collis|\bwreck|\bstruck\b|\bstrike\b|hit by|"
     r"\bhit\b.{0,20}(car|vehicle|truck|wall|pole|tree|curb|building|fence|"
@@ -84,10 +138,21 @@ CONTROL_LOSS = re.compile(
 
 CATEGORIES = [("injury", INJURY), ("crash", CRASH), ("fire", FIRE), ("control_loss", CONTROL_LOSS)]
 
-# --- Hedge: hypothetical / recall / future-risk / near-miss context ----------
+# --- Hedge: hypothetical / future-risk / near-miss context -------------------
 # A co-occurring flag, not an override (v2) -- see module docstring point 3.
+# v5: bare "recall" removed. Found via a forensic recall-vs-v2 comparison: 7 of 10
+# rows where "recall" was the ONLY hedge trigger were administrative mentions
+# ("were not on recall," "no recall associated with the VIN," a bare listing of
+# recall numbers) with no risk/hypothetical framing at all -- the word alone
+# doesn't distinguish "this part was recalled" (a fact) from "there's a recall
+# because it could catch fire" (a hypothetical). Checked this doesn't lose real
+# detection: the one genuine hedge/recall case already in the record (odino
+# 10660775's Takata complaint -- "the transmission COULD fail... What a
+# NIGHTMARE!") still fires via "could" and "nightmare" independently, so
+# "recall" was never doing unique work for a true positive, only false-triggering
+# on administrative ones.
 HEDGE = re.compile(
-    r"\brecall\b|\bcould\b|\bmight\b|\bpotential\b|risk of|in case|\bwarned\b|"
+    r"\bcould\b|\bmight\b|\bpotential\b|risk of|in case|\bwarned\b|"
     r"\bnearly\b|\balmost\b|"
     r"\bif\b.{0,30}(fail|deploy|crash)|\bnightmare\b",
     re.I,
@@ -101,10 +166,16 @@ HEDGE = re.compile(
 # fires. Fixed by listing common contractions explicitly (found via full-scale
 # audit, train odino 10257384: "SHE DON'T HAVE ANY INJURIES" wasn't caught).
 # "nobody"/"no one" added too (odino 11746042: "nobody was hurt" wasn't caught).
+# v4: "avoided"/"prevented" added to PRE too -- found via Round 4 label-correction
+# review, train odino 10948421: "narrowly AVOIDED an accident" has the trigger
+# word BEFORE the match, which only NEGATION_POST (after-only) used to check.
+# "no/not/contractions" deliberately stay PRE-only -- checking them in the AFTER
+# window too would risk new false negatives (e.g. "the crash happened, no doubt"
+# would wrongly cancel a real crash if "no" were checked after the match).
 NEGATION_PRE = re.compile(
     r"\b(no|not|n't|without|don't|doesn't|didn't|isn't|wasn't|weren't|aren't|"
     r"hasn't|haven't|hadn't|wouldn't|couldn't|shouldn't|won't|can't|cannot|"
-    r"nobody|no one|noone)\b",
+    r"nobody|no one|noone|avoided|prevented)\b",
     re.I,
 )
 # Post-triggers: negation/cancellation word appears AFTER the matched phrase

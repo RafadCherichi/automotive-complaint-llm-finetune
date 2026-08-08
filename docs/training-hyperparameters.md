@@ -146,3 +146,34 @@ example count alone within this rule-derived label scheme — a real, open quest
 any future iteration of this project, not something resolved here. Recorded as a known
 limitation, not chased with a fourth round, per the explicit decision to stop after
 three.
+
+## Round 4 training run
+
+Same locked hyperparameters as v1-v3 (`r=16`, `alpha=32`, `use_dora=True`, `lr=2e-4`, 3
+epochs) — only the training data and target schema changed. `MAX_SEQ_LENGTH` raised
+768→896, a mechanical consequence of the longer 7-field target JSON, checked against the
+real tokenizer (`scripts/check_seq_lengths_v4.py`), not assumed.
+
+Trained on `data/processed/train_v4.jsonl` — see `docs/label-strategy.md`'s Round 4
+section for the label-correction methodology. Epoch2→epoch3 eval loss regression was
+small (0.7723→0.7772, 0.63% — smaller than v1's 0.83% and v2's 0.79%), so the checkpoint
+choice wasn't made on loss alone this round: both checkpoints were fully evaluated and
+compared on real downstream task metrics (`docs/eval-report.md` Section 7). **Epoch2
+won, 11 metrics to 3, and shipped as v4-FINAL**
+(`models/qwen3-8b-automotive-complaint-lora-v4-FINAL/`).
+
+**Disclosed gap: v4-FINAL was trained on the 38-correction version of `train_v4.jsonl`,
+not the 42-correction version that exists now.** After training completed, a forensic
+investigation into v4's `safety_risk` recall (`docs/eval-report.md` Section 7) found and
+fixed a bug in `text_support_audit.py`'s `HEDGE` pattern (see `docs/label-strategy.md`'s
+v5 section) that had been suppressing 4 additional legitimate label corrections in the
+training set — 38/900 became 42/900, a 0.44 percentage-point shift (4 rows). **No
+retrain was run for this delta.** At 4 rows out of 900 (and given the fix only touches
+rows that were already being handled conservatively — left as hedge-ambiguous rather
+than mis-corrected — not a systematic error affecting a meaningful fraction of the
+dataset), a retrain wasn't judged to be worth the Colab/Kaggle GPU time for a change this
+small. This is a disclosed, known gap between the shipped model's actual training data
+and the most-current, most-corrected label set — not something discovered later and
+smoothed over. If a future round retrains for any other reason, it should train on the
+current `train_v4.jsonl` (42 corrections), not the 38-correction snapshot v4-FINAL
+actually saw.

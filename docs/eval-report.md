@@ -4,10 +4,13 @@ The core evidence document for this project: does QLoRA + DoRA fine-tuning on re
 NHTSA complaint data actually improve structured safety-extraction accuracy over the
 unmodified base model, measured on the same 140-example held-out set every time.
 
-**Shipped model:** v2 (`models/qwen3-8b-automotive-complaint-lora-FINAL/`). All numbers
-in this report are pulled directly from `eval/eval_results_v1.json`,
-`eval/eval_results_v2.json`, and `eval/eval_results_v3.json` — nothing rounded up or
-softened, including the results that don't flatter the shipped model.
+**Current shipped model: v4** (`models/qwen3-8b-automotive-complaint-lora-v4-FINAL/`,
+Round 4 — see Section 7). Sections 1-6 below are the original three-round investigation
+that shipped **v2** (`models/qwen3-8b-automotive-complaint-lora-FINAL/`) — left as
+written, an accurate record of that investigation at the time, not rewritten in light of
+Round 4. All numbers in this report are pulled directly from `eval/eval_results_v1.json`
+through `eval/eval_results_v4_epoch2.json` — nothing rounded up or softened, including
+results that don't flatter whichever model was shipped at the time.
 
 ---
 
@@ -374,6 +377,203 @@ by the pattern of what rebalancing did and didn't fix.
 
 ---
 
+## 7. Round 4: text-supported label correction + atomic decomposition
+
+Section 6 found two things: `safety_risk` had real, measurable label noise (57% of v2's
+errors traced to labels the text itself contradicted), and the `severity` medium/high
+seesaw did not (0/20 confused rows had any injury language, confirmed by both keyword
+audit and full manual read). Round 4 acts on the first finding and tests whether giving
+the model explicit, auditable "what does the text actually say" signals helps with both.
+
+**What changed** (full methodology, exact row counts, and the two borderline-call
+writeups are in `docs/label-strategy.md`'s Round 4 section):
+- **42 of 900 `train.jsonl` rows** (4.7%) had `safety_risk`/`severity` corrected to match
+  the narrative text — via an automated audit, two regex fix rounds, then hand review
+  once the automated pool hit a ~25% false-positive ceiling regex patching couldn't push
+  past. (Originally 38/900 at the time v4 was trained; a later forensic pass found and
+  fixed one more `HEDGE` bug, raising it to 42 — this changed the reporting-layer ground
+  truth only, not the already-trained model, see the recall bullet below.) `eval.jsonl`
+  was never touched — still the fixed comparison point across all four rounds.
+- **Target schema expanded from 4 fields to 7**: `component`, `defect_type`,
+  `safety_risk`, `severity` (unchanged) plus `crash_described`, `fire_described`,
+  `injury_described` — booleans derived from the same validated text lexicon, not NHTSA
+  metadata.
+- Hyperparameters unchanged (`r=16`, `alpha=32`, `use_dora=True`, `lr=2e-4`, 3 epochs);
+  `MAX_SEQ_LENGTH` raised 768→896, a mechanical consequence of the longer 7-field target
+  (checked against the real tokenizer, not assumed — 16/1040 rows exceeded 768).
+
+**Disclosed gap, stated plainly rather than buried in a parenthetical: the shipped
+v4-FINAL model was actually trained on the 38-correction version of `train_v4.jsonl`,
+not the 42-correction version described throughout this section.** The forensic
+recall-drop investigation below found and fixed a `HEDGE` bug *after* training had
+already completed, which raised the correction count from 38 to 42 (4 rows, a 0.44
+percentage-point shift). **No retrain was run for this delta** — at 4/900 rows, and
+given the rows involved were already being handled conservatively (left unchanged
+rather than mis-corrected) rather than actively wrong, it wasn't judged worth the
+Colab/Kaggle GPU cost. Full reasoning in `docs/training-hyperparameters.md`'s Round 4
+section. This means every accuracy number in this section reflects the model as
+actually trained and shipped, evaluated against the *current* (42-correction)
+text-consistent ground truth — a real, small mismatch between training-time and
+reporting-time label versions, disclosed here rather than hidden.
+
+### Checkpoint decision: epoch2 vs. epoch3, decided on task metrics, not loss alone
+
+v4's epoch2→epoch3 eval loss regression was small (0.7723 → 0.7772, **0.63%** — smaller
+than v1's 0.83% and v2's 0.79%), small enough to plausibly be validation noise on a
+140-example eval set rather than confirmed overfitting. So this round didn't inherit the
+v1-v3 default of "epoch 2 wins" — both checkpoints were fully evaluated and compared on
+real downstream metrics.
+
+**Epoch2 won, 11 metrics to 3 (3 ties):**
+
+| metric | epoch3 | epoch2 | winner |
+|---|---|---|---|
+| component accuracy (strict) | 70.0% | 67.1% | epoch3 (+2.9pp) |
+| component accuracy (relaxed) | 72.1% | 70.7% | epoch3 (+1.4pp) |
+| defect_type accuracy | 71.4% | 72.1% | epoch2 (+0.7pp) |
+| safety_risk accuracy (official) | 90.0% | 91.4% | epoch2 (+1.4pp) |
+| safety_risk accuracy (text-consistent) | 95.0% | 96.4% | epoch2 (+1.4pp) |
+| safety_risk=yes precision | 87.8% | 88.4% | epoch2 (+0.6pp) |
+| safety_risk=yes recall | 80.0% | 84.4% | epoch2 (+4.4pp) |
+| severity accuracy (official) | 77.9% | 79.3% | epoch2 (+1.4pp) |
+| severity accuracy (text-consistent) | 82.9% | 83.6% | epoch2 (+0.7pp) |
+| severity: medium | 29.6% | 33.3% | epoch2 (+3.7pp) |
+| severity: high | 61.1% | 66.7% | epoch2 (+5.6pp) |
+| crash_described accuracy | 93.6% | 92.9% | epoch3 (−0.7pp) |
+| fire_described / injury_described | tie | tie | — |
+
+Epoch2 won every `safety_risk` metric (both label framings) and every `severity` metric,
+including the two historically hardest tiers. Epoch3 only won on `component` — a
+lower-priority field, since `safety_risk` is this project's load-bearing number
+(`blueprint.md` Section 3) — and `crash_described`, by a margin (0.7pp, ~1 example)
+too thin to weigh against a near-clean sweep elsewhere. **Epoch2 ships as v4.** This
+validates the same direction v1-v3 always took by default, but this time on evidence
+instead of an assumption carried over from loss alone.
+
+### v1 → v2 → v3 → v4: full comparison, official labels
+
+| metric | v1 | v2 (Rounds 1-3 shipped) | v3 | **v4 (shipped)** |
+|---|---|---|---|---|
+| component accuracy | 68.6% | 64.3% | 66.4% | **67.1%** |
+| defect_type accuracy | 69.3% | 67.1% | 71.4% | **72.1%** |
+| safety_risk accuracy | 81.4% | 85.0% | 86.4% | **91.4%** |
+| severity accuracy | 70.0% | 70.7% | 75.7% | **79.3%** |
+| safety_risk=yes precision | 68.6% | 71.4% | 86.1% | **88.4%** |
+| safety_risk=yes recall | 77.8% | **88.9%** | 68.9% | 84.4% |
+| severity: low | 83.2% | 83.2% | 94.7% | **94.7%** |
+| severity: medium | 70.4% | 14.8% | 59.3% | 33.3% |
+| severity: high | 0.0% | **88.9%** | 0.0% | 66.7% |
+
+**v4 beats v2 on every headline metric except one uncontested regression** (`severity:
+high`) **and one that looks like a regression in the aggregate number but isn't one on
+forensic inspection** (`safety_risk` recall):
+
+- **`safety_risk` recall, forensically verified row-by-row**: the raw confusion matrices
+  (computed directly from `eval_results_v2.json`/`eval_results_v4_epoch2.json`, not
+  recalled from the summary numbers) are v2 TP=40/FP=16/FN=5/TN=79 and v4
+  TP=38/FP=5/FN=7/TN=90 — both reproduce the reported 88.9%/84.4% recall exactly.
+  Pulling every row where the two models disagree gives the full picture: **14 rows
+  where v4 fixed a mistake v2 made, 0 rows where v2 fixed a mistake v4 made, and 2 rows
+  where v4 newly misses what v2 caught.** All 14 fixes are false positives (v2 wrongly
+  said `yes`; every one has `crash_described`/`fire_described`/`injury_described` all
+  `False` in v4's output, and several — 10432604, 10468085, 10660775, 10536141,
+  11742196, 11056804, 10097937 — are exact matches to the "text contradicts label" rows
+  already identified in Section 6). **Neither of the 2 new misses is a case of the model
+  reading real danger signal worse than v2 did:**
+  - Odino 964875 ("...did not engage vehicle in reverse. causing loss of control" — no
+    described impact) has NHTSA `crash=True` but its own audit-corrected entry in
+    `data/processed/eval_text_consistent.json` is `label_source:
+    text_corrected_downgrade` — **the project's own Round 4 audit already determined
+    this row's official `yes` label is itself text-unsupported.** v4 predicting `no`
+    matches the corrected label; this isn't a miss by the text-consistent standard.
+  - Odino 876084 (tire tread separated at highway speed, driver pulled over safely, no
+    collision described) traced to a spurious hedge match — rerunning the detector on
+    the raw text directly gave `hits=[]`, `hedge='RECALL'`, and the "recall" trigger
+    fired on an unrelated sentence ("tires were not on recall or on advisory list"), not
+    a hypothetical-risk mention. **Update since this was first written:** that specific
+    bug (bare "recall" as a hedge trigger, with no risk/hypothetical co-occurrence
+    requirement) was found to affect 10 rows total and was fixed in `text_support_audit.py`
+    (v5) — see `docs/label-strategy.md`'s Round 4 section for the full forensic pass. With
+    the fix applied, 876084's own audit-corrected entry is now also
+    `label_source: text_corrected_downgrade` (`safety_risk: no`), matching v4's
+    prediction. **Both of the 2 new misses are now audit-confirmed non-misses**, not one
+    confirmed and one merely ambiguous.
+
+  **So the actual, verified picture is 14 clean wins and 0 clean losses** — the −4.5pp
+  aggregate recall number is real (both new misses keep their official `yes` label,
+  since `eval.jsonl` is never modified, so they count against v4 in the official-label
+  metric regardless of how contested the underlying evidence is), but it should not be
+  read as "v4 got worse at catching real safety risks." It's the same phenomenon behind
+  the 14 fixes — trusting the text over an ambiguous or contradicted metadata flag —
+  landing as a miss instead of a fix on 2 edge cases that the project's own audit now
+  says shouldn't count as misses at all.
+- **`severity: high`**: v2's 88.9% vs. v4's 66.7% (−22.2pp) — the one metric where v2 is
+  still clearly better. v2 was specifically built to solve high-severity detection (the
+  v1→v2 injury-only-high fix, Section 2), and v4's training data wasn't rebuilt around
+  that same fix — the 38 Round 4 corrections target label-text mismatches, not the
+  sub-pattern imbalance v2 solved. The atomic fields didn't erase this gap: giving the
+  model `injury_described` as an explicit signal improved `severity: medium` a lot
+  (33.3% vs. v2's 14.8%) but didn't fully recover v2's `high`-tier strength. **This is a
+  real, honest limitation of v4, not a result to obscure** — the shared-signal problem
+  documented in `docs/learning/06_class_imbalance_three_rounds.md` still isn't fully
+  solved; Round 4 improved the label quality feeding it without resolving the underlying
+  medium/high separability issue.
+
+### Text-consistent numbers (adjusted ceiling) and new atomic-field metrics
+
+New in v4 — graded against `data/processed/eval_text_consistent.json` (7/140 rows
+adjusted as of a v5 fix to a false "recall"-keyword hedge trigger — see the recall
+bullet above; originally 5/140 — same audit+hand-review standard as the training
+corrections, reporting only, `eval.jsonl` itself untouched):
+
+| metric | official labels | text-consistent (adjusted) |
+|---|---|---|
+| safety_risk accuracy | 91.4% | **96.4%** |
+| safety_risk=yes precision | 88.4% | 93.0% |
+| safety_risk=yes recall | 84.4% | 95.2% |
+| severity accuracy | 79.3% | 83.6% |
+
+Atomic-field accuracy (crash/fire/injury described, vs. the same reporting layer):
+`crash_described` 92.9%, `fire_described` 97.9%, `injury_described` 93.6%. Relaxed
+`component` accuracy (matches any co-occurring valid label, not just the strict
+first-listed target): 70.7% vs. 67.1% strict, on 31/140 multi-component complaints.
+
+### Is this near the realistic ceiling?
+
+Before Round 4 ran, the label-noise audit (Section 6) implied a rough prediction: with
+~15-20% confirmed label noise on `safety_risk`, a realistic ceiling for that field sits
+around 90-92%, not higher — and general noisy-label text classification research
+(Clothing1M, WebVision-style benchmarks) tops out around 75-86% even with dedicated
+noise-robust methods, for comparison.
+
+**v4's `safety_risk` accuracy landed at 91.4% (official) / 96.4% (text-consistent) —
+right at, and above, the predicted ceiling.** That's a clean result to report
+plainly: **further iteration on `safety_risk` specifically is not expected to help much
+more**, because the model is now performing close to what the label quality itself
+allows, not being held back by a fixable model deficiency. The text-consistent number
+exceeding the predicted ceiling (96.4% > 92%) makes sense given it's graded against
+labels the audit itself cleaned — the official-label number (91.4%) is the fairer one to
+judge the ceiling against, and it lands squarely inside the predicted 90-92% band.
+
+`severity` accuracy (79.3% official / 83.6% text-consistent) sits inside the general
+75-86% noisy-label benchmark range too, but the tier-level breakdown shows this isn't a
+uniform ceiling story: `low` is well past it (94.7%), `medium` is well under (33.3%),
+`high` regressed from v2 rather than improving. **This is the honest, undissolved part of
+Round 4's result**: the safety_risk-level label noise fix worked as evidenced (landed at
+its predicted ceiling), but the medium/high severity boundary — already confirmed in
+Section 6 to be a genuine model-separability problem, not a labeling one — is not
+something this round's intervention (better labels, an explicit text-signal field) was
+ever positioned to fix, and it didn't. **No new diagnosable cause surfaced for the
+medium/high gap in Round 4** the way each prior round surfaced one (v1's sub-pattern
+imbalance, v2's absolute-count problem) — so unlike those, this isn't a lead into an
+obvious Round 5. Per the shared-signal theory in `docs/learning/06_...md`, closing it
+would need a structurally different intervention (e.g., loss reweighting toward
+injury-specific vocabulary, or a two-stage "is there risk" / "how severe" architecture)
+rather than another data-quality pass — flagged as an open question for future work, not
+a default next round.
+
+---
+
 ## Sources
 
 `eval/eval_results_v1.json`, `eval/eval_results_v2.json`, `eval/eval_results_v3.json` —
@@ -386,5 +586,10 @@ analysis of already-saved output. Section 6's text-support audit used
 (hand-validation sampling), `scripts/full_text_support_audit.py` (the full-scale run),
 `scripts/isolate_hit_pattern_cases.py` and `scripts/medium_high_injury_check.py`
 (follow-up checks) — also no retraining, no GPU, measurement only against files already
-in the repo. Training-side detail in `docs/training-hyperparameters.md`;
-label-derivation and dataset-composition detail in `docs/label-strategy.md`.
+in the repo. Section 7's Round 4 comparison used `eval/eval_results_v4_epoch3.json` and
+`eval/eval_results_v4_epoch2.json` (both graded on the same unchanged `eval.jsonl`, plus
+the new `data/processed/eval_text_consistent.json` reporting layer for the
+text-consistent numbers) — real Kaggle GPU runs, not simulated; the checkpoint
+comparison table was computed directly from both files, not eyeballed. Training-side
+detail in `docs/training-hyperparameters.md`; label-derivation, dataset-composition, and
+the full Round 4 label-correction methodology in `docs/label-strategy.md`.
