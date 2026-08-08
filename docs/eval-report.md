@@ -302,6 +302,78 @@ resulted, so the official flags read `no`/`low`.
 
 ---
 
+## 6. Text-support audit: how much of the measured error is label noise vs. real model error
+
+Sections 2 and 3 documented the `severity: medium`/`high` seesaw across three training
+rounds, purely from retraining outcomes. A separate follow-up question: since
+`safety_risk`/`severity` labels are derived deterministically from NHTSA's *structured*
+flags (`CRASH`/`FIRE`/`INJURED`/`DEATHS` — see `docs/label-strategy.md`), not from the
+narrative text the model actually sees, could some of the measured error be the model
+correctly reading text that simply doesn't support its own label, rather than the model
+being wrong?
+
+**Methodology:** a deterministic, fully-inspectable keyword detector (4 alarm categories
+— injury, crash, fire, control-loss — plus negation handling and a separate "hedge"
+flag for hypothetical/recall language), built and hand-validated against two rounds of a
+stratified, human-checked sample before being run at scale. Deliberately *not*
+LLM-based — using a model to judge whether text supports a label would be circular (see
+`docs/learning/04_label_derivation_from_existing_flags.md`). Every pattern is in
+`scripts/text_support_audit.py`; the full run is `scripts/full_text_support_audit.py`.
+Measurement only — no retraining, no changes to `train.jsonl` or `eval.jsonl`.
+
+### safety_risk: real, measurable label noise
+
+Cross-referencing the detector against v2's actual wrong predictions
+(`eval/eval_results_v2.json`):
+
+| | count | % of wrong predictions |
+|---|---|---|
+| model wrong, but label contradicted by narrative text | 12 / 21 | **57.1%** |
+| model wrong, text ambiguous (hedge-only) | 3 / 21 | 14.3% |
+| model wrong, label text-supported (genuine model error) | 6 / 21 | 28.6% |
+
+Across the full eval set, `safety_risk: no` labels are the weaker side: only 52.6% of
+"no" rows (50/95) have narrative text with no alarm language at all; 21.1% (20/95)
+describe something a reader would flag as concerning anyway; 26.3% (25/95) are ambiguous
+(hedge words like "could"/"recall"/"nearly" with no other signal). `safety_risk: yes`
+labels are much better supported — 77.8% (eval, 35/45) and 84.6% (train, 301/356). The
+same pattern holds on the 900-row training set, so it isn't a small-sample artifact.
+
+**Conclusion: v2's measured 85.0% `safety_risk` accuracy likely understates the model's
+real skill.** More than half of its "wrong" predictions are on rows where the label
+itself doesn't match what the narrative describes — the model may be reading the text
+correctly and disagreeing with a label a human would also question.
+
+### severity medium/high confusion: confirmed NOT a labeling artifact
+
+This is the more important result, because it tests the seesaw from Section 2/3 directly
+— and it points the opposite way. Two independent checks, both against the 20 eval rows
+where the actual label is `medium` and v2 predicted `high`:
+
+1. **Automated keyword check:** only 1 of the 20 had any INJURY-category hit in the
+   text — and that one case ("...seat fell backward, **could have caused injuries**...")
+   is a hedge/hypothetical, not a real injury. Effectively 0/20.
+2. **Full manual read, ignoring the lexicon entirely** — every one of the 20 narratives
+   read directly, judged for *any* wording describing an actual injury: **0/20.**
+   - 3 rows explicitly state no injury occurred (*"THERE WERE NO INJURIES"*, ×2 more
+     with the same wording).
+   - 2 rows describe a near-miss or hypothetical, not a real injury (*"could have
+     caused injuries"*, *"quick thinking... so no lives were lost"*).
+   - 15 rows never mention an injury at all — real crash/mechanical-failure narratives
+     (hit a pole, hit a fence, brake failure, tire-tread separation, airbag
+     non-deployment) with no injury outcome stated.
+
+**Conclusion: the `medium`/`high` seesaw is a genuine, unresolved model limitation, not
+something more data or relabeling would fix.** The model over-predicts `high` on rows
+that are real and alarming (crash/collision language is genuinely present, correctly
+matching `safety_risk: yes`) but carry no injury signal in the text — and the `medium`
+label is correct given that text. This directly confirms the "shared-signal problem"
+theory from the three-round retraining story
+(`docs/learning/06_class_imbalance_three_rounds.md`) by direct human reading, not just
+by the pattern of what rebalancing did and didn't fix.
+
+---
+
 ## Sources
 
 `eval/eval_results_v1.json`, `eval/eval_results_v2.json`, `eval/eval_results_v3.json` —
@@ -309,6 +381,10 @@ each graded on the identical, byte-verified-unchanged 140-example `data/processe
 Section 4's review-trigger rules were measured directly against v2's saved predictions
 with `scripts/boundary_review_analysis.py` (narrow rule) and
 `scripts/boundary_review_analysis_v2.py` (broader rule) — no retraining, no GPU, pure
-analysis of already-saved output. Training-side detail in
-`docs/training-hyperparameters.md`; label-derivation and dataset-composition detail in
-`docs/label-strategy.md`.
+analysis of already-saved output. Section 6's text-support audit used
+`scripts/text_support_audit.py` (the detector), `scripts/pull_validation_sample.py`
+(hand-validation sampling), `scripts/full_text_support_audit.py` (the full-scale run),
+`scripts/isolate_hit_pattern_cases.py` and `scripts/medium_high_injury_check.py`
+(follow-up checks) — also no retraining, no GPU, measurement only against files already
+in the repo. Training-side detail in `docs/training-hyperparameters.md`;
+label-derivation and dataset-composition detail in `docs/label-strategy.md`.

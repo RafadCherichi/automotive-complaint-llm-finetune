@@ -79,3 +79,28 @@ retraining round (`docs/label-strategy.md`'s "Known limitations").
   language) and differ on exactly one dimension (injury presence) — the shared-signal
   case is the one this fix can't solve, and needed to be documented as an honest,
   unresolved limitation instead.
+
+## (4) Confirmed by direct audit, not just inferred from retraining
+
+Everything above was inferred from the *pattern* of what three rounds of rebalancing did
+and didn't fix — strong circumstantial evidence, but still indirect. A later, separate
+investigation tested the shared-signal theory directly: for every eval-set complaint
+where the actual label is `severity: medium` and the shipped model (v2) predicted
+`high`, does the narrative text actually contain injury language that a rebalance could
+plausibly have taught the model to use?
+
+Two independent checks — an automated keyword detector and a full manual read of all 20
+confused narratives, ignoring the keyword list entirely — both landed on the same
+answer: **0 of 20 contain any injury language, in any wording.** The complaints are real
+and alarming (crash/collision language genuinely present), but none of them describe an
+actual injury; the `medium` label is correct given the text, and the model's `high`
+prediction is a real miss, not a defensible read of ambiguous wording.
+
+This confirms the shared-signal theory as **verified, not just inferred**: the model
+genuinely cannot separate `medium` from `high` using the text alone, because for these
+20 rows there is no injury signal in the text to separate them with. No amount of
+rebalancing training-example counts changes what information is present in a given
+narrative — which is exactly why three rounds of rebalancing shifted the failure back
+and forth between `medium` and `high` without ever resolving it. Full methodology,
+numbers, and the read-through of all 20 narratives are in `docs/eval-report.md` Section
+6 and `scripts/medium_high_injury_check.py`.
