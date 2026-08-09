@@ -1,3 +1,17 @@
+# STATUS: built and ready, blocked on local model file availability. Phase 4 (merge to
+# 16-bit + GGUF quantization) is formally descoped -- see docs/blueprint.md Section 6a.
+# The merge+conversion pipeline's ~32GB peak disk usage doesn't fit Kaggle's 20GB limit
+# or survive Colab's from-source llama.cpp build even with capped parallelism -- a
+# structural constraint of the pipeline, not something more retries would fix. Left in
+# place, not deleted: the config is correct and would work immediately if a .gguf file
+# were ever produced. See notebooks/demo_v4.ipynb for the runnable cloud-notebook
+# alternative, and docs/eval-report.md for the project's actual evidence base.
+#
+# NOTE: this still targets the 4-field v2 model/schema (Rounds 1-3's shipped adapter).
+# v4 (Round 4, current shipped model, models/qwen3-8b-automotive-complaint-lora-v4-FINAL/)
+# uses a 7-field schema (+ crash_described/fire_described/injury_described) -- the
+# SYSTEM prompt below would need updating to match before pointing this at a v4 GGUF file.
+#
 # Ollama Modelfile for the shipped model (Phase 3 v2 adapter, merged + quantized to
 # Q4_K_M in notebooks/merge_and_quantize_gguf.ipynb).
 #

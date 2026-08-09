@@ -35,10 +35,13 @@ In order, each building on the last:
 
 ## Status
 
-**Phases 1-3 done and shipped.** The trained model, the full base-vs-fine-tuned
-evaluation, and the demo application code are all complete. **Phase 4 (local GGUF
-quantization + demo) is paused** at a purely infrastructural step — not a modeling
-problem — see [What's left](#whats-left-phase-4) below.
+**Phases 1-3 done and shipped (v2). Round 4 done and shipped (v4, current model)** — a
+label-noise investigation found and corrected real contradictions between some official
+labels and the narrative text, added a 7-field target, retrained, and v4 now beats v2 on
+nearly every headline metric. **Phase 4 (local GGUF quantization + local demo) is
+formally descoped** — a structural infrastructure constraint, not a modeling problem —
+see [Phase 4: descoped](#phase-4-descoped) below. A lightweight cloud-notebook demo
+(`notebooks/demo_v4.ipynb`) replaces it.
 
 ## Results
 
@@ -69,7 +72,7 @@ production-mitigation recommendation are in the eval report.
 | 1 — Data | Streamed NHTSA's full 2.16M-row complaint database; derived all 4 target fields from NHTSA's own structured columns (zero manual labeling, zero synthetic data); built a stratified 900-row train / 140-row eval split | [`label-strategy.md`](docs/label-strategy.md) |
 | 2 — Training | QLoRA + DoRA on Qwen3-8B via Unsloth, locked hyperparameters, 3 training rounds on Kaggle as the Phase 3 diagnosis drove real data fixes | [`training-hyperparameters.md`](docs/training-hyperparameters.md) |
 | 3 — Evaluation | Base vs. fine-tuned on the held-out set across all 3 rounds; diagnosed a severity-tier blind spot, fixed it, found a new tradeoff, and made the shipping call with evidence, not a guess | [`eval-report.md`](docs/eval-report.md) |
-| 4 — Local demo | Paused — see below | — |
+| 4 — Local demo | **Descoped** — see below | — |
 | 5 — Docs | This README, `pm-perspective.md`, `docs/learning/` (6 concept cards), `code-walkthrough.md` | see [How to read this project](#how-to-read-this-project) |
 
 ## Repo structure
@@ -77,40 +80,43 @@ production-mitigation recommendation are in the eval report.
 ```
 scripts/            data pipeline: NHTSA flat-file parsing, label derivation, dataset builds
 notebooks/          train_qlora_dora.ipynb, eval_baseline_vs_finetuned.ipynb (Colab/Kaggle),
-                     merge_and_quantize_gguf.ipynb (Phase 4, paused)
+                     merge_and_quantize_gguf.ipynb (Phase 4, descoped)
 data/processed/      train.jsonl / eval.jsonl (gitignored — real NHTSA text, not synthetic)
 models/              trained adapters (gitignored — see docs for which one shipped)
 eval/                eval_results_v1/v2/v3.json — full graded predictions, all 3 rounds
-demo/                streamlit_app.py — ready to run once a .gguf file exists
+demo/                streamlit_app.py — built and ready, blocked on local model file availability (see below)
 docs/                blueprint.md, pm-perspective.md, label-strategy.md,
                      training-hyperparameters.md, code-walkthrough.md, eval-report.md
 docs/learning/       01-06: concept cards, one per real project decision
 ```
 
-## What's left (Phase 4)
+## Phase 4: descoped
 
-The shipped adapter, the evaluation, and `demo/streamlit_app.py` are all done and
-waiting. What's left is one local-packaging step: merge the adapter into the base model
-and quantize it to GGUF (Q4_K_M) so it runs on a 4GB VRAM card, per the hardware
-contract in the blueprint.
+**Not pursuing further.** Root cause, confirmed by two separate real runs, not a
+one-off fluke: the merge-to-16-bit + GGUF-conversion step needs the merged model
+(~16GB) and the F16 intermediate (~16.4GB) to coexist on disk at once — roughly 32GB
+peak.
+1. Kaggle's fixed 20GB disk limit couldn't fit that — confirmed twice.
+2. Moving to Colab for its larger disk instead OOM-killed the from-source llama.cpp
+   build, even after capping parallel compilation to `-j 2` — confirmed once, after
+   that specific fix.
 
-This hit two rounds of real cloud-infrastructure friction, both diagnosed and fixed in
-`notebooks/merge_and_quantize_gguf.ipynb`:
-1. Kaggle's fixed 20GB disk couldn't fit the merge+conversion pipeline's peak disk
-   usage (~32GB) — fixed by moving the notebook to Google Colab, which has more disk.
-2. Colab's build then got OOM-killed compiling llama.cpp with unrestricted parallel
-   jobs — fixed by capping the build to `-j 2`, plus hardening the notebook's
-   success/failure checks so a truncated file can never again be silently treated as a
-   successful conversion.
+**This is a structural constraint of the quantization pipeline itself, not something
+more retries, another platform, or a further round of infra fixes would resolve.**
+Closing it out rather than continuing to spend cloud-GPU time chasing it.
 
-Neither fix has been confirmed against a real end-to-end run yet. To resume: run
-`notebooks/merge_and_quantize_gguf.ipynb` on Colab, bring the resulting `.gguf` file
-back to `models/`, then:
-```
-ollama create qwen3-8b-automotive-complaint -f models/Modelfile
-venv/Scripts/python.exe scripts/verify_local_gguf.py
-venv/Scripts/streamlit.exe run demo/streamlit_app.py
-```
+`demo/streamlit_app.py` and `models/Modelfile` are left in the repo, not deleted — the
+code is correct and would run immediately if a `.gguf` file were ever produced — but
+both are clearly labeled as built-and-ready-but-blocked, and both still target the
+superseded 4-field v2 model rather than v4's 7-field one.
+
+**The project's evidence base is [`docs/eval-report.md`](docs/eval-report.md) and the
+label-noise investigation, not a live local demo — a deliberate, disclosed scope
+decision, not an oversight.** For an actually-runnable demo, use
+[`notebooks/demo_v4.ipynb`](notebooks/demo_v4.ipynb) instead: it loads the base model +
+v4 adapter in 4-bit on a Colab/Kaggle GPU, the same proven pattern used in every
+training and eval run in this project — no merge, no GGUF conversion, no local disk or
+RAM constraint to hit.
 
 ## Hardware contract
 

@@ -1,5 +1,22 @@
 """Phase 4 local demo -- paste a raw vehicle complaint, get structured JSON back.
 
+STATUS: built and ready, blocked on local model file availability. Phase 4 (merge to
+16-bit + GGUF quantization) is formally descoped -- see docs/blueprint.md Section 6a
+and README.md. The merge+conversion pipeline's ~32GB peak disk usage doesn't fit
+Kaggle's 20GB limit or survive Colab's from-source llama.cpp build even with capped
+parallelism; this is a structural constraint of the quantization pipeline, not
+something more retries would fix. This file is left in place, not deleted, because the
+code itself is correct and the reasoning behind it (a local, no-internet demo) is still
+real -- it would run immediately if a .gguf file were ever produced. The project's
+evidence base is docs/eval-report.md and the label-noise investigation, not this demo;
+notebooks/demo_v4.ipynb is the cloud-notebook alternative that's actually runnable today.
+
+NOTE for anyone reviving this: it still targets the 4-field v2 schema/model (Rounds
+1-3's shipped adapter). v4 (Round 4, current shipped model) uses a 7-field schema
+(component, defect_type, safety_risk, severity, crash_described, fire_described,
+injury_described) -- SYSTEM_PROMPT and the parsed-field display below would both need
+updating to match before pointing this at a v4 GGUF file.
+
 Calls Ollama's REST API (localhost:11434) for inference -- no torch/GPU deps in this
 process itself; Ollama runs the quantized GGUF model out-of-process. Run with:
     venv/Scripts/streamlit.exe run demo/streamlit_app.py

@@ -4,7 +4,9 @@
 **Rank:** 3 of 5 — completes the "LLM competency triangle" (RAG → Agents → Fine-tuning)
 **Predecessors:** Project 1 (RAG Feedback Analyzer, done) · Project 2 (Agentic Text-to-SQL, done)
 **Worker:** Claude Code
-**Status: Phases 1-3 complete and shipped. Phase 4 (local GGUF demo) paused — infrastructure hurdle, not a modeling gap. See Section 6a.**
+**Status: Phases 1-3 complete and shipped (v2), Round 4 complete and shipped (v4, current
+model). Phase 4 (local GGUF demo) descoped — infrastructure constraint, not a modeling
+gap. See Section 6a.**
 
 ---
 
@@ -184,12 +186,13 @@ Additions vs. the original 9-category proposal: unintended acceleration (histori
 | **Phase 1** | Local dev env, NHTSA data pull, label derivation logic proposed + confirmed, training set (~500-1,000 pairs) + held-out eval set (~100-150 pairs) built |
 | **Phase 2** | Colab/Kaggle QLoRA + DoRA training notebook, base model loaded in 4-bit, LoRA config (rank/alpha — options-first if nontrivial), training run, adapter saved |
 | **Phase 3** | Evaluation: baseline (zero-shot Qwen3-8B) vs. fine-tuned, on JSON validity rate + field-level accuracy over the held-out set; error analysis writeup |
-| **Phase 4** | Merge/export adapter, quantize to GGUF (Q4), verify it runs locally on the RTX 3050; build the demo (Streamlit, matching Project 2's pattern) — **paused, see 6a** |
-| **Phase 5** | Docs: learning docs (alternatives-considered tables in full), `pm-perspective.md`, README, final repo cleanup — **docs done** (written ahead of Phase 4 resuming, since Phase 4 is an infrastructure hurdle, not a modeling gap — see Section 6a); final repo cleanup still open |
+| **Phase 4** | Merge/export adapter, quantize to GGUF (Q4), verify it runs locally on the RTX 3050; build the demo (Streamlit, matching Project 2's pattern) — **descoped, see 6a**. A cloud-notebook demo (`notebooks/demo_v4.ipynb`) replaces it — same proven 4-bit adapter-loading pattern as every eval run, no merge/GGUF/local RAM needed. |
+| **Phase 5** | Docs: learning docs (alternatives-considered tables in full), `pm-perspective.md`, README, final repo cleanup — **done** |
+| **Round 4** | (post-Phase-5) Text-supported label correction, 7-field atomic-decomposition target, retrained and shipped as **v4** (current model) — see `docs/eval-report.md` Section 7, `docs/label-strategy.md` |
 
 ---
 
-## Section 6a — Current Status (paused after Phase 3)
+## Section 6a — Current Status (Phase 4 descoped; Round 4 shipped)
 
 **Phases 1-3 are complete and represent the project's core evidence — nothing about
 them is blocked or in question.** In order:
@@ -202,23 +205,40 @@ them is blocked or in question.** In order:
   data fixes and retrains. Full detail: `docs/training-hyperparameters.md`.
 - **Phase 3:** Base-vs-fine-tuned evaluation on a fixed 140-example held-out set across
   all three rounds, honest error analysis, a measured (not assumed) production
-  mitigation recommendation. **v2 is the shipped model** — the only round that fixed
-  `severity: high` detection (0% → 88.9% accuracy) while keeping the best `safety_risk`
-  recall (88.9%), the number the project's safety-triage framing depends on most. Full
-  detail, including where the model is still weak and why: `docs/eval-report.md`.
+  mitigation recommendation. v2 shipped as the Rounds 1-3 model — the only round that
+  fixed `severity: high` detection (0% → 88.9% accuracy) while keeping the best
+  `safety_risk` recall (88.9%). Full detail: `docs/eval-report.md`.
+- **Round 4** (post-Phase-5): a label-noise audit found real, measurable contradiction
+  between some official labels and the narrative text feeding the model; corrected the
+  affected training/eval labels, added a 7-field atomic-decomposition target, retrained,
+  and shipped **v4** — the current model, beating v2 on nearly every headline metric.
+  Full detail: `docs/eval-report.md` Section 7, `docs/label-strategy.md`.
 
-**Phase 4 (local GGUF quantization + Streamlit demo) is paused, not abandoned, and not
-because of a modeling problem.** The trained model (shipped, verified complete), the
-full evaluation, and the demo application code are all done. What remains is purely a
-local-packaging step: converting the shipped adapter into a quantized GGUF file that
-runs on the RTX 3050. This step has hit repeated cloud-infrastructure friction —
-Kaggle's fixed 20GB disk limit couldn't fit the merge+conversion pipeline's peak disk
-usage, and after moving to Colab for its larger disk, the from-source llama.cpp build
-was OOM-killed by unrestricted parallel compilation. Both were diagnosed and fixed in
-`notebooks/merge_and_quantize_gguf.ipynb` (disk-space staging, verified error handling,
-capped build parallelism), but the fixes haven't been confirmed against a real run yet.
-**Ready to resume from an improved starting point whenever picked back up** — see
-`README.md` for exactly what's left.
+**Phase 4 (local GGUF quantization + Streamlit demo) is formally descoped — not paused,
+not abandoned, and not because of a modeling problem.** Root cause, confirmed by two
+separate real runs, not assumed: the merge-to-16-bit + GGUF-conversion step requires the
+merged model (~16GB) and the F16 intermediate (~16.4GB) to coexist on disk simultaneously
+— roughly 32GB peak. This exceeds Kaggle's fixed 20GB disk limit (hit twice) and
+triggered an OOM during Colab's from-source llama.cpp compilation even after capping
+parallel build jobs (hit once, after that specific fix). **This is a structural
+constraint of the quantization pipeline itself — the merged model and the F16
+intermediate must both exist at once for the conversion step to run — not something more
+retries, a different platform, or another round of infra fixes would resolve** without a
+fundamentally different approach (e.g. streaming conversion, or quantizing on a machine
+with substantially more disk than either free-tier platform offers).
+
+**Descoping this does not mean the project has no working demonstration.** The trained
+model, the full evaluation (`docs/eval-report.md`), and the label-noise investigation
+(`docs/eval-report.md` Section 6-7, `docs/label-strategy.md`) are the project's actual
+evidence base — a deliberate, disclosed scope decision, not an oversight. A lightweight
+cloud-notebook demo (`notebooks/demo_v4.ipynb`) replaces the local Streamlit app: it
+reuses the exact same "load base model + adapter in 4-bit" pattern already proven
+working across every training and eval notebook run in this project, with no merge, no
+GGUF conversion, and no local disk/RAM constraint to hit. `demo/streamlit_app.py` and
+`models/Modelfile` are left in the repo, not deleted — the code is correct and would run
+immediately if a `.gguf` file were ever produced — but both are clearly labeled as
+blocked on local model file availability, and both still target the superseded 4-field
+v2 model/schema rather than v4's 7-field one.
 
 ---
 
@@ -245,11 +265,14 @@ automotive-complaint-llm-finetune/
 │   └── eval-report.md             (Phase 3 output)
 ├── data/                      # gitignored — raw NHTSA pulls + processed sets
 ├── notebooks/
-│   ├── train_qlora_dora.ipynb            # runs on Colab/Kaggle, not local
-│   ├── eval_baseline_vs_finetuned.ipynb  # runs on Colab/Kaggle, not local
-│   └── merge_and_quantize_gguf.ipynb     # Phase 4, paused — see Section 6a
+│   ├── train_qlora_dora.ipynb            # v1-v3, runs on Colab/Kaggle, not local
+│   ├── eval_baseline_vs_finetuned.ipynb  # v1-v3, runs on Colab/Kaggle, not local
+│   ├── train_qlora_dora_v4.ipynb         # Round 4, 7-field target
+│   ├── eval_baseline_vs_finetuned_v4.ipynb # Round 4
+│   ├── demo_v4.ipynb                     # cloud-notebook demo, replaces Phase 4's local one
+│   └── merge_and_quantize_gguf.ipynb     # Phase 4, descoped — see Section 6a
 ├── eval/
-│   └── eval_results_v1/v2/v3.json  # full graded predictions, all 3 training rounds
+│   └── eval_results_v1/v2/v3.json, eval_results_v4_epoch2/epoch3.json  # full graded predictions, all rounds
 ├── models/                    # gitignored (weights) except Modelfile, README.md
 │   ├── Modelfile
 │   └── README.md
